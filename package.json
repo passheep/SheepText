@@ -1,6 +1,6 @@
 {
   "name": "sheeptext",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "private": true,
   "description": "Windows desktop AI drafting notebook",
   "author": "SheepText",
@@ -22,6 +22,8 @@
     "@codemirror/view": "6.43.11",
     "@lezer/highlight": "1.2.3",
     "@lucide/vue": "1.43.0",
+    "@milkdown/crepe": "^7.22.1",
+    "@milkdown/kit": "^7.22.1",
     "dompurify": "3.4.15",
     "marked": "18.0.12",
     "vue": "3.5.42"

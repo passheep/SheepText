@@ -16,13 +16,14 @@ import BaseButton from './components/BaseButton.vue'
 import HistoryDrawer from './components/HistoryDrawer.vue'
 import IconButton from './components/IconButton.vue'
 import MarkdownPreview from './components/MarkdownPreview.vue'
+import MilkdownEditor from './components/MilkdownEditor.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import TextEditor from './components/TextEditor.vue'
 import appIcon from './assets/app-icon.png'
 
 type EditorExpose = {
   focus: () => void
-  replaceRange: (from: number, to: number, text: string) => void
+  replaceRange: (from: number, to: number, text: string, replaceWholeDocument?: boolean) => void
   undoOnce: () => boolean
   redoOnce: () => boolean
   setScrollRatio: (ratio: number) => void
@@ -39,6 +40,7 @@ type RequestSnapshot = {
   mode: EnhanceMode
   modelConfigId: string
   isSelection: boolean
+  editorKind: 'text' | 'milkdown'
 }
 
 type AiPanelState = {
@@ -58,7 +60,7 @@ const booting = ref(true)
 const draft = ref<Draft | null>(null)
 const settings = ref<AppSettings | null>(null)
 const models = ref<ModelConfigPublic[]>([])
-const appVersion = ref('0.2.7')
+const appVersion = ref('0.3.0')
 const encryptionAvailable = ref(true)
 const editor = ref<EditorExpose | null>(null)
 const editorFocused = ref(false)
@@ -122,6 +124,9 @@ const sceneOptions: SelectOption[] = [
 const hasSelection = computed(() => selection.to > selection.from)
 const validSelectionLength = computed(() => hasSelection.value ? selection.text.trim().length : 0)
 const characterCount = computed(() => draft.value?.content.length ?? 0)
+const currentEditorKind = computed<'text' | 'milkdown'>(() =>
+  draft.value?.displayMode === 'markdown' && markdownView.value === 'preview' ? 'milkdown' : 'text'
+)
 const themeAttribute = computed(() => settings.value?.theme ?? 'system')
 const themeStyle = computed(() => {
   const color = settings.value?.themeColor ?? '#6958cf'
@@ -139,9 +144,7 @@ const editorSurfaceClass = computed(() => [
 const aiRangeLabel = computed(() => {
   const snapshot = ai.snapshot
   if (!snapshot) return '全文'
-  return snapshot.range.from === 0 && snapshot.range.to === snapshot.content.length
-    ? '全文'
-    : `选区 ${snapshot.range.to - snapshot.range.from} 字`
+  return snapshot.isSelection ? `选区 ${snapshot.text.length} 字` : '全文'
 })
 const interactionState = computed<WindowInteractionState>(() => ({
   interacting: editorFocused.value,
@@ -640,11 +643,12 @@ async function runEnhance(mode: EnhanceMode, reuse?: RequestSnapshot): Promise<v
       version: draft.value.version,
       content: draft.value.content,
       range,
-      text: draft.value.content.slice(range.from, range.to),
+      text: hasSelection.value ? selection.text : draft.value.content,
       scene: draft.value.scene,
       mode,
       modelConfigId,
-      isSelection: hasSelection.value
+      isSelection: hasSelection.value,
+      editorKind: currentEditorKind.value
     }
   }
   if (!snapshot.text.trim()) {
@@ -686,6 +690,7 @@ async function runEnhance(mode: EnhanceMode, reuse?: RequestSnapshot): Promise<v
     ai.durationMs = result.durationMs
     ai.modelName = result.modelName
     ai.conflict = draft.value.id !== snapshot.draftId || draft.value.version !== snapshot.version
+      || (snapshot.isSelection && snapshot.editorKind !== currentEditorKind.value)
   } catch (error) {
     if (ai.requestId !== requestId) return
     ai.loading = false
@@ -695,7 +700,12 @@ async function runEnhance(mode: EnhanceMode, reuse?: RequestSnapshot): Promise<v
 
 function adoptAiResult(): void {
   if (!ai.snapshot || ai.conflict || !ai.result) return
-  editor.value?.replaceRange(ai.snapshot.range.from, ai.snapshot.range.to, ai.result)
+  if (ai.snapshot.isSelection && ai.snapshot.editorKind !== currentEditorKind.value) {
+    ai.conflict = true
+    showToast({ type: 'warning', message: '编辑方式已切换，请重新选择文字后再采用结果' })
+    return
+  }
+  editor.value?.replaceRange(ai.snapshot.range.from, ai.snapshot.range.to, ai.result, !ai.snapshot.isSelection)
   closeAiPanel()
   showToast({ type: 'success', message: '已采用改写结果，可使用 Ctrl + Z 撤销' })
 }
@@ -877,8 +887,25 @@ function cleanError(error: unknown): string {
         </div>
         <div class="editor-layout" :class="[`view-${markdownView}`, { markdown: draft.displayMode === 'markdown' }]" :style="{ '--split-left': `${splitRatio}fr`, '--split-right': `${1 - splitRatio}fr` }">
           <section class="editor-pane">
+            <MilkdownEditor
+              v-if="draft.displayMode === 'markdown' && markdownView === 'preview'"
+              :key="`${draft.id}-milkdown`"
+              ref="editor"
+              :model-value="draft.content"
+              :font-size="settings.fontSize"
+              :show-line-numbers="settings.showLineNumbers"
+              :draft-id="draft.id"
+              @update:model-value="onContentChanged"
+              @selection-change="onSelectionChanged"
+              @focus-change="editorFocused = $event"
+              @composition-change="isComposing = $event"
+              @font-size-change="onFontSizeChange"
+              @scroll-change="onEditorScroll"
+              @toast="showToast"
+            />
             <TextEditor
-              :key="draft.id"
+              v-else
+              :key="`${draft.id}-text`"
               ref="editor"
               :model-value="draft.content"
               :display-mode="draft.displayMode"
@@ -894,7 +921,7 @@ function cleanError(error: unknown): string {
               @scroll-change="onEditorScroll"
               @toast="showToast"
             />
-            <div v-if="!draft.content" class="starter-hints no-drag">
+            <div v-if="!draft.content && !(draft.displayMode === 'markdown' && markdownView === 'preview')" class="starter-hints no-drag">
               <span>试试这样开始</span>
               <button @click="editor?.focus()"><Code2 :size="15" />整理一段编程需求</button>
               <button @click="editor?.focus()"><Image :size="15" />完善一个生图想法</button>
