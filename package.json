@@ -1,0 +1,86 @@
+{
+  "name": "sheeptext",
+  "version": "0.2.7",
+  "private": true,
+  "description": "Windows desktop AI drafting notebook",
+  "author": "SheepText",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "build": "npm run typecheck && electron-vite build",
+    "package": "npm run test && npm run build && electron-builder --win nsis",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "@codemirror/commands": "6.11.0",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/search": "6.7.2",
+    "@codemirror/state": "6.7.4",
+    "@codemirror/view": "6.43.11",
+    "@lezer/highlight": "1.2.3",
+    "@lucide/vue": "1.43.0",
+    "dompurify": "3.4.15",
+    "marked": "18.0.12",
+    "vue": "3.5.42"
+  },
+  "devDependencies": {
+    "@types/node": "26.5.0",
+    "@vitejs/plugin-vue": "6.0.8",
+    "electron": "43.4.1",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "5.0.0",
+    "vue-tsc": "3.3.11"
+  },
+  "build": {
+    "appId": "com.sheeptext.desktop",
+    "productName": "SheepText",
+    "directories": {
+      "output": "release/delivery",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "SheepText_${version}_${arch}-setup.${ext}",
+      "icon": "resources/icon.ico",
+      "executableName": "SheepText",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SheepText",
+      "uninstallDisplayName": "SheepText"
+    },
+    "extraResources": [
+      {
+        "from": "resources/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "resources/tray.png",
+        "to": "tray.png"
+      }
+    ],
+    "electronDist": "node_modules/electron/dist"
+  }
+}
