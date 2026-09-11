@@ -27,7 +27,7 @@ const listElement = ref<HTMLElement | null>(null)
 const scrollTop = ref(0)
 const viewportHeight = ref(500)
 const pendingDelete = ref<DraftSummary | null>(null)
-const itemHeight = 88
+const itemHeight = 72
 const overscan = 5
 const visibleStart = computed(() => Math.max(0, Math.floor(scrollTop.value / itemHeight) - overscan))
 const visibleEnd = computed(() => Math.min(props.items.length, Math.ceil((scrollTop.value + viewportHeight.value) / itemHeight) + overscan))

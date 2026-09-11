@@ -449,3 +449,23 @@
 .cm-live-format-button.is-active{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 28%,var(--border));background:var(--primary-soft)}
 .cm-live-format-button:disabled{opacity:.35;cursor:not-allowed}.cm-live-format-button.is-bold{font-weight:850}.cm-live-format-button.is-italic{font-family:Georgia,serif;font-style:italic}.cm-live-format-button.is-strike{text-decoration:line-through}.cm-live-format-button.is-code{font-family:Consolas,'Cascadia Code',monospace;font-size:9px}.cm-live-format-button.is-link{font-size:15px;font-weight:600}
 .cm-live-format-divider{width:1px;height:18px;margin:0 2px;background:var(--border-strong)}
+/* 2026-09-11 compact dock controls, history cards and preview gutters */
+.floating-command{width:40px!important;min-width:40px!important;height:38px!important;max-width:40px!important;padding:4px!important;border-radius:12px!important;overflow:hidden;isolation:isolate}
+.floating-command:hover,.floating-command:focus-within{width:max-content!important;max-width:calc(100vw - 24px)!important;padding:4px!important;overflow:visible}
+.floating-command-hint{position:absolute!important;inset:50% auto auto 50%;z-index:2;display:grid!important;place-items:center;width:28px!important;height:28px!important;color:var(--primary)!important;opacity:1!important;visibility:visible;transform:translate(-50%,-50%);pointer-events:none}
+.floating-command-right .floating-command-hint{color:var(--primary)!important}
+.floating-command-hint svg{display:block!important;width:17px!important;height:17px!important;opacity:1!important;stroke:currentColor!important;stroke-width:2.15!important}
+.floating-command .command-left,.floating-command .command-right{display:none!important;opacity:0!important;pointer-events:none!important;transform:none!important}
+.floating-command:hover .floating-command-hint,.floating-command:focus-within .floating-command-hint{opacity:0!important;visibility:hidden}
+.floating-command:hover .command-left,.floating-command:hover .command-right,.floating-command:focus-within .command-left,.floating-command:focus-within .command-right{display:flex!important;opacity:1!important;pointer-events:auto!important;transform:none!important}
+.floating-command .command-left,.floating-command .command-right{gap:5px!important}
+.floating-command .mode-switch,.floating-command .scope-chip,.floating-command .scene-button,.floating-command .enhance-icon-button{margin:0!important}
+
+.history-item.is-virtual{right:14px!important;left:6px!important;height:64px!important}
+.history-item-open{gap:4px!important;padding:7px 10px 6px!important}
+.history-item-top{min-height:20px!important}
+.history-item-bottom{min-height:16px!important;line-height:16px!important}
+.history-delete-button{top:5px!important;right:6px!important}
+
+.cm-milkdown-editor .cm-gutters{padding-top:0!important;padding-bottom:0!important}
+.cm-milkdown-editor .cm-lineNumbers .cm-gutterElement{display:flex;align-items:flex-start;justify-content:flex-end;min-height:0!important;padding-top:2px!important;line-height:var(--editor-line-height,30.26px)!important}
