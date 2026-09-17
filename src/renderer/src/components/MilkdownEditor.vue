@@ -9,6 +9,7 @@ import { TextSelection, type EditorState, type Transaction } from '@milkdown/kit
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { callCommand, getMarkdown, replaceAll, replaceRange as replaceMarkdownRange } from '@milkdown/kit/utils'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ListTree } from '@lucide/vue'
 import type { ToastPayload } from '../../../shared/types'
 
 const props = defineProps<{
@@ -53,6 +54,12 @@ const searchError = ref('')
 const matches = ref<SearchMatch[]>([])
 const activeMatchIndex = ref(-1)
 const hasEditorSelection = ref(false)
+
+// 大纲导航：从 ProseMirror 文档树提取标题及真实节点位置
+type OutlineItem = { level: number; text: string; pos: number }
+const outlineOpen = ref(false)
+const outlineItems = ref<OutlineItem[]>([])
+let outlineCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 let crepe: Crepe | null = null
 let editorView: EditorView | null = null
@@ -150,6 +157,7 @@ onMounted(async () => {
         emit('update:modelValue', markdown)
       }
       updateSearchMatches()
+      refreshOutline()
       scheduleCursorSafetyUpdate()
     })
     listener.selectionUpdated((ctx, value) => {
@@ -588,6 +596,54 @@ function cleanError(error: unknown): string {
   return message.replace(/^Error invoking remote method '[^']+': Error: /, '').replace(/^Error: /, '')
 }
 
+// 从当前文档提取标题，只遍历真实 heading 节点，避免把代码块里的 # 当标题
+function refreshOutline(): void {
+  if (!editorView) {
+    outlineItems.value = []
+    return
+  }
+  const items: OutlineItem[] = []
+  editorView.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'heading') {
+      const text = node.textContent.trim()
+      if (text) items.push({ level: node.attrs.level as number, text, pos })
+    }
+    return true
+  })
+  outlineItems.value = items
+}
+
+function handleOutlineEnter(): void {
+  if (outlineCloseTimer) { clearTimeout(outlineCloseTimer); outlineCloseTimer = null }
+  refreshOutline()
+  outlineOpen.value = true
+}
+
+function handleOutlineLeave(): void {
+  if (outlineCloseTimer) clearTimeout(outlineCloseTimer)
+  outlineCloseTimer = setTimeout(() => { outlineOpen.value = false }, 220)
+}
+
+function jumpToHeading(item: OutlineItem): void {
+  if (!editorView) return
+  const target = editorView.state.doc.nodeAt(item.pos)
+  if (!target) { refreshOutline(); return }
+  // 点击大纲仅移动选区和滚动，不改动正文内容
+  editorView.dispatch(editorView.state.tr.setSelection(TextSelection.near(editorView.state.doc.resolve(item.pos + 1))).scrollIntoView())
+  editorView.focus()
+  requestAnimationFrame(() => {
+    if (!editorView || !shell.value) return
+    const dom = editorView.domAtPos(item.pos + 1)
+    const element = dom.node instanceof Element ? dom.node : dom.node.parentElement
+    const bounds = element?.getBoundingClientRect()
+    if (bounds) shell.value.scrollTop += bounds.top - shell.value.getBoundingClientRect().top - 24
+  })
+}
+
+onBeforeUnmount(() => {
+  if (outlineCloseTimer) clearTimeout(outlineCloseTimer)
+})
+
 defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio })
 </script>
 
@@ -602,6 +658,18 @@ defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRat
     }"
     :style="{ '--milkdown-font-size': `${fontSize}px` }"
   >
+    <div class="milkdown-outline no-drag" @mouseenter="handleOutlineEnter" @mouseleave="handleOutlineLeave">
+      <button type="button" class="milkdown-outline-trigger" title="文档大纲" @click="handleOutlineEnter"><ListTree :size="17" /></button>
+      <Transition name="popover">
+        <div v-if="outlineOpen" class="milkdown-outline-panel">
+          <p v-if="!outlineItems.length" class="milkdown-outline-empty">暂无标题，使用 # 可创建标题</p>
+          <button v-for="(item, index) in outlineItems" :key="`${index}-${item.pos}`" type="button" class="milkdown-outline-item" :style="{ paddingLeft: `${(item.level - 1) * 14 + 12}px` }" :title="item.text" @click="jumpToHeading(item)">
+            <span class="milkdown-outline-level">H{{ item.level }}</span><span class="milkdown-outline-text">{{ item.text }}</span>
+          </button>
+        </div>
+      </Transition>
+    </div>
+
     <div v-if="searchOpen" ref="findWidget" class="milkdown-find-widget sheep-find-widget no-drag" :class="{ 'is-replacing': replaceOpen }" @mousedown.stop>
       <div class="milkdown-find-row sheep-find-row sheep-find-search-row">
         <button class="milkdown-find-toggle sheep-find-expand" :class="{ 'is-expanded': replaceOpen }" type="button" :title="replaceOpen ? '收起替换' : '展开替换'" @click="replaceOpen = !replaceOpen">›</button>

@@ -832,3 +832,16 @@
 .sheep-milkdown-editor .milkdown-code-block .milkdown-code-block-placeholder{color:var(--text-tertiary)}
 [data-theme='dark'] .sheep-milkdown-editor .milkdown-code-block{background:color-mix(in srgb,#000 26%,var(--bg-soft))}
 @media(prefers-color-scheme:dark){[data-theme='system'] .sheep-milkdown-editor .milkdown-code-block{background:color-mix(in srgb,#000 26%,var(--bg-soft))}}
+
+
+/* 2026-09-17 Markdown 大纲悬浮导航 */
+.milkdown-outline{position:absolute;top:10px;right:14px;z-index:70}
+.milkdown-outline-trigger{display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--border);border-radius:9px;color:var(--text-tertiary);background:color-mix(in srgb,var(--surface-elevated) 88%,transparent);box-shadow:var(--shadow-sm);cursor:pointer;backdrop-filter:blur(16px);transition:.15s ease}
+.milkdown-outline-trigger:hover{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 30%,var(--border));background:var(--primary-soft)}
+.milkdown-outline-panel{position:absolute;top:calc(100% + 6px);right:0;z-index:71;width:min(300px,calc(100vw - 40px));max-height:min(56vh,420px);overflow:auto;padding:6px;border:1px solid var(--border-strong);border-radius:12px;background:color-mix(in srgb,var(--surface-elevated) 96%,transparent);box-shadow:var(--shadow-md);backdrop-filter:blur(20px);user-select:none}
+.milkdown-outline-empty{margin:6px 8px;padding:8px 0;color:var(--text-tertiary);font-size:11px;text-align:center}
+.milkdown-outline-item{display:flex;align-items:center;gap:7px;width:100%;max-width:100%;padding:7px 12px;border:0;border-radius:8px;color:var(--text-secondary);background:transparent;cursor:pointer;text-align:left;font-size:12px;transition:.13s ease}
+.milkdown-outline-item:hover{color:var(--primary);background:var(--surface-hover)}
+.milkdown-outline-level{flex:0 0 auto;padding:1px 4px;border-radius:5px;color:var(--text-tertiary);background:var(--bg-soft);font-size:9px;font-weight:750}
+.milkdown-outline-item:hover .milkdown-outline-level{color:var(--primary);background:var(--primary-soft)}
+.milkdown-outline-text{overflow:hidden;min-width:0;flex:1;text-overflow:ellipsis;white-space:nowrap}
