@@ -295,7 +295,16 @@ export class WindowManager {
       return
     }
     const draft = this.store.getMostRecentDraft() ?? this.store.createDraft()
-    const record = this.store.createWindowRecord(draft.id, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
+    // 无存活窗口时，优先继承最近关闭窗口的有效几何，避免回退默认尺寸。
+    const lastBounds = this.store.getLastClosedWindowBounds()
+    const width = lastBounds?.width ?? WINDOW_DEFAULT_WIDTH
+    const height = lastBounds?.height ?? WINDOW_DEFAULT_HEIGHT
+    const record = this.store.createWindowRecord(draft.id, width, height)
+    if (lastBounds) {
+      record.x = lastBounds.x
+      record.y = lastBounds.y
+      record.displayId = lastBounds.displayId
+    }
     void this.createWindow(record, false)
   }
 
@@ -329,11 +338,19 @@ export class WindowManager {
   }
 
   minimizeWindow(windowId: string): void {
-    this.windows.get(windowId)?.browserWindow.minimize()
+    const runtime = this.windows.get(windowId)
+    if (!runtime) return
+    // 最小化前先落库有效几何，避免防抖期间隐藏或退出丢失最新位置。
+    this.saveWindowBounds(runtime)
+    runtime.browserWindow.minimize()
   }
 
   hideWindow(windowId: string): void {
-    this.windows.get(windowId)?.browserWindow.hide()
+    const runtime = this.windows.get(windowId)
+    if (!runtime) return
+    // 隐藏前先落库有效几何，保证托盘重开或重启时使用最近位置。
+    this.saveWindowBounds(runtime)
+    runtime.browserWindow.hide()
   }
 
   setAlwaysOnTop(windowId: string, value: boolean): void {

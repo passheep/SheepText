@@ -506,6 +506,15 @@ export class DataStore {
     this.db.prepare('UPDATE window_states SET is_open = 0, last_active_at = ? WHERE id = ?').run(Date.now(), windowId)
   }
 
+  // 查询最近关闭窗口的有效几何，供托盘重开或冷启动时继承尺寸与位置。
+  getLastClosedWindowBounds(): { x: number; y: number; width: number; height: number; displayId: string | null } | null {
+    const row = this.db.prepare(
+      'SELECT x, y, width, height, display_id FROM window_states WHERE is_open = 0 AND x IS NOT NULL AND y IS NOT NULL ORDER BY last_active_at DESC LIMIT 1'
+    ).get() as { x: number; y: number; width: number; height: number; display_id: string | null } | undefined
+    if (!row) return null
+    return { x: row.x, y: row.y, width: row.width, height: row.height, displayId: row.display_id }
+  }
+
   private mapDraft(row: DraftRow): Draft {
     return {
       id: row.id, content: row.content, createdAt: row.created_at, updatedAt: row.updated_at,
