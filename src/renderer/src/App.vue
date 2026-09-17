@@ -86,6 +86,17 @@ function keepPastedFormat(): void {
   hidePasteNotice()
 }
 
+// “更多新建方式”弹层：延迟关闭兜底，给鼠标穿过按钮与菜单间隙的时间
+let newMenuCloseTimer: ReturnType<typeof setTimeout> | null = null
+function openNewMenu(): void {
+  if (newMenuCloseTimer) { clearTimeout(newMenuCloseTimer); newMenuCloseTimer = null }
+  newMenuOpen.value = true
+}
+function scheduleNewMenuClose(): void {
+  if (newMenuCloseTimer) clearTimeout(newMenuCloseTimer)
+  newMenuCloseTimer = setTimeout(() => { newMenuOpen.value = false }, 180)
+}
+
 // 鼠标悬停后离开，重新计时自动隐藏
 function startPasteNoticeTimer(): void {
   clearPasteNoticeTimer()
@@ -197,6 +208,7 @@ const editorSurfaceClass = computed(() => [
   `editor-bg-${settings.value?.editorBackground ?? 'auto'}`,
   `editor-pattern-${settings.value?.editorPattern ?? 'none'}`
 ])
+const hasDefaultModel = computed(() => Boolean(settings.value?.defaultModelConfigId))
 const aiRangeLabel = computed(() => {
   const snapshot = ai.snapshot
   if (!snapshot) return '全文'
@@ -816,9 +828,9 @@ function cleanError(error: unknown): string {
           <div class="history-trigger no-drag" @mouseenter="onHistoryTriggerEnter" @mouseleave="onHistoryTriggerLeave">
             <IconButton title="文稿历史" :active="historyOpen" @click="toggleHistoryByClick"><History :size="18" /></IconButton>
           </div>
-          <div class="new-draft-group no-drag" @mouseleave="newMenuOpen = false">
+          <div class="new-draft-group no-drag" @mouseleave="scheduleNewMenuClose">
             <button class="quick-new" type="button" title="新建文稿" @click="createDraft"><Plus :size="16" /><span>新建</span></button>
-            <button class="quick-new-menu" type="button" title="更多新建方式" @mouseenter="newMenuOpen = true" @focus="newMenuOpen = true" @click="newMenuOpen = !newMenuOpen"><ChevronDown :size="14" /></button>
+            <button class="quick-new-menu" type="button" title="更多新建方式" @mouseenter="openNewMenu" @focus="newMenuOpen = true" @click="newMenuOpen = !newMenuOpen"><ChevronDown :size="14" /></button>
             <Transition name="popover">
               <div v-if="newMenuOpen" class="new-menu">
                 <button type="button" @click="createDraft"><FilePlus2 :size="17" /><span><strong>新建文稿</strong><small>在当前窗口打开空白草稿</small></span></button>
@@ -879,8 +891,9 @@ function cleanError(error: unknown): string {
               </button>
             </div></Transition>
           </div>
-          <button type="button" class="enhance-icon-button" title="保守增强：尽量保持原意和结构" :disabled="ai.loading" @mousedown.prevent @click="runEnhance('conservative')"><WandSparkles :size="18" /><span class="action-label">保守增强</span></button>
-          <button type="button" class="enhance-icon-button" title="创意重写：更大胆地优化表达" :disabled="ai.loading" @mousedown.prevent @click="runEnhance('creative')"><Sparkles :size="18" /><span class="action-label">创意重写</span></button>
+          <!-- 未设默认模型时隐藏增强入口，避免点了必然报错 -->
+          <button v-if="hasDefaultModel" type="button" class="enhance-icon-button" title="保守增强：尽量保持原意和结构" :disabled="ai.loading" @mousedown.prevent @click="runEnhance('conservative')"><WandSparkles :size="18" /><span class="action-label">保守增强</span></button>
+          <button v-if="hasDefaultModel" type="button" class="enhance-icon-button" title="创意重写：更大胆地优化表达" :disabled="ai.loading" @mousedown.prevent @click="runEnhance('creative')"><Sparkles :size="18" /><span class="action-label">创意重写</span></button>
           </div>
         </div>
         <div class="editor-layout" :class="{ markdown: draft.displayMode === 'markdown' }">
