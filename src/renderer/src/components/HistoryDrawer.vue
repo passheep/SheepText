@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertTriangle, Clock3, FileText, LoaderCircle, Search, Sparkles, Trash2, X } from '@lucide/vue'
+import { AlertTriangle, Clock3, LoaderCircle, Search, Sparkles, Trash2, X } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import type { DraftSummary } from '../../../shared/types'
 import BaseButton from './BaseButton.vue'
@@ -128,7 +128,6 @@ function fullTime(timestamp: number): string {
             <button type="button" class="history-item-open" @click="emit('select', item.id)">
               <span class="history-item-top">
                 <span class="history-badges">
-                  <FileText :size="15" class="history-item-doc-icon" />
                   <span v-if="item.isCurrent" class="mini-badge accent">当前</span>
                   <span v-else-if="item.openWindowId" class="mini-badge">已打开</span>
                   <span class="mini-badge">{{ item.displayMode === 'markdown' ? 'MD' : 'TXT' }}</span>

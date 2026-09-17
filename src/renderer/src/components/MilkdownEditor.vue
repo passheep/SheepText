@@ -2,9 +2,10 @@
 import { Crepe, CrepeFeature } from '@milkdown/crepe'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/classic.css'
-import { editorViewCtx } from '@milkdown/kit/core'
+import { editorViewCtx, prosePluginsCtx } from '@milkdown/kit/core'
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
-import { TextSelection } from '@milkdown/kit/prose/state'
+import { keymap } from '@milkdown/kit/prose/keymap'
+import { TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { callCommand, getMarkdown, replaceAll, replaceRange as replaceMarkdownRange } from '@milkdown/kit/utils'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -15,6 +16,7 @@ const props = defineProps<{
   fontSize: number
   showLineNumbers: boolean
   draftId: string
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -36,6 +38,7 @@ type SearchMatch = {
 
 type LineMarker = {
   top: number
+  height: number
   label: number
 }
 
@@ -72,8 +75,8 @@ let lineUpdateFrame = 0
 let cursorUpdateFrame = 0
 
 const matchLabel = computed(() => {
-  if (searchError.value) return '表达式无效'
-  if (!searchText.value) return '输入内容'
+  if (searchError.value) return '表达式错误'
+  if (!searchText.value) return '0/0'
   if (!matches.value.length) return '无结果'
   return `${activeMatchIndex.value + 1}/${matches.value.length}`
 })
@@ -143,6 +146,11 @@ onMounted(async () => {
         }
       }
     }
+  })
+
+  crepe.setReadonly(Boolean(props.readonly))
+  crepe.editor.config((ctx) => {
+    ctx.update(prosePluginsCtx, (plugins) => [keymap({ 'Mod-d': duplicateCurrentBlock }), ...plugins])
   })
 
   crepe.on((listener) => {
@@ -233,8 +241,9 @@ watch(() => props.fontSize, (size) => {
 })
 
 watch(() => props.showLineNumbers, scheduleLineNumberUpdate)
+watch(() => props.readonly, (value) => crepe?.setReadonly(Boolean(value)))
 watch([searchText, matchCase, wholeWord, useRegex, selectionOnly], updateSearchMatches)
-watch(replaceOpen, () => nextTick(() => (replaceOpen.value ? replaceInput.value : findInput.value)?.focus()))
+watch(replaceOpen, () => nextTick(() => (replaceOpen.value ? replaceInput.value : findInput.value)?.focus({ preventScroll: true })))
 
 async function uploadImage(file: File): Promise<string> {
   try {
@@ -311,17 +320,54 @@ function scheduleLineNumberUpdate(): void {
 
 function updateLineNumbers(): void {
   lineUpdateFrame = 0
-  if (!props.showLineNumbers || !editorView || !host.value) {
+  if (!props.showLineNumbers || !editorView || !shell.value) {
     lineMarkers.value = []
     return
   }
-  const proseMirror = editorView.dom
-  const shellBounds = shell.value?.getBoundingClientRect()
-  const proseBounds = proseMirror.getBoundingClientRect()
-  const hostTop = shellBounds && shell.value ? proseBounds.top - shellBounds.top + shell.value.scrollTop : proseMirror.offsetTop
-  lineMarkers.value = Array.from(proseMirror.children)
-    .filter((element): element is HTMLElement => element instanceof HTMLElement && !element.classList.contains('ProseMirror-gapcursor'))
-    .map((element, index) => ({ top: hostTop + element.offsetTop, label: index + 1 }))
+
+  const shellBounds = shell.value.getBoundingClientRect()
+  let label = 1
+  const markers: LineMarker[] = []
+  editorView.state.doc.descendants((node, position) => {
+    if (!node.isTextblock) return true
+    const dom = editorView?.nodeDOM(position)
+    if (!(dom instanceof HTMLElement)) return true
+    const bounds = dom.getBoundingClientRect()
+    if (bounds.height <= 0) return true
+    markers.push({
+      top: bounds.top - shellBounds.top + shell.value!.scrollTop,
+      height: bounds.height,
+      label: label++
+    })
+    return true
+  })
+  lineMarkers.value = markers
+}
+
+function duplicateCurrentBlock(state: EditorState, dispatch?: (transaction: Transaction) => void): boolean {
+  const { $head } = state.selection
+  let blockDepth = Math.max(1, $head.depth)
+  for (let depth = $head.depth; depth > 0; depth -= 1) {
+    const node = $head.node(depth)
+    if (node.type.name === 'list_item') {
+      blockDepth = depth
+      break
+    }
+    if (node.isTextblock) blockDepth = depth
+  }
+
+  const from = $head.before(blockDepth)
+  const to = $head.after(blockDepth)
+  const slice = state.doc.slice(from, to)
+  if (!slice.content.size) return false
+  if (!dispatch) return true
+
+  const selectionOffset = Math.max(1, state.selection.head - from)
+  let transaction = state.tr.insert(to, slice.content)
+  const nextCursor = Math.min(transaction.doc.content.size, to + selectionOffset)
+  transaction = transaction.setSelection(TextSelection.near(transaction.doc.resolve(nextCursor))).scrollIntoView()
+  dispatch(transaction)
+  return true
 }
 
 function buildSearchExpression(global = true): RegExp | null {
@@ -439,6 +485,15 @@ function replacementFor(match: SearchMatch): string {
   return preserveCase.value ? preserveReplacementCase(match.text, result) : result
 }
 
+function selectEveryMatch(): void {
+  if (!editorView || !matches.value.length) return
+  const first = matches.value[0]
+  const last = matches.value[matches.value.length - 1]
+  if (!first || !last) return
+  editorView.dispatch(editorView.state.tr.setSelection(TextSelection.create(editorView.state.doc, first.from, last.to)).scrollIntoView())
+  editorView.focus()
+}
+
 function replaceCurrent(): void {
   if (!editorView) return
   const match = matches.value[activeMatchIndex.value]
@@ -497,6 +552,8 @@ function onReplaceKeydown(event: KeyboardEvent): void {
 }
 
 function openSearch(): void {
+  if (props.readonly) return
+  const previousScrollTop = shell.value?.scrollTop ?? 0
   searchOpen.value = true
   emit('focusChange', true)
   if (editorView) {
@@ -508,9 +565,14 @@ function openSearch(): void {
     }
   }
   nextTick(() => {
-    findInput.value?.focus()
+    if (shell.value) shell.value.scrollTop = previousScrollTop
+    findInput.value?.focus({ preventScroll: true })
     findInput.value?.select()
     updateSearchMatches()
+    scheduleLineNumberUpdate()
+    requestAnimationFrame(() => {
+      if (shell.value) shell.value.scrollTop = previousScrollTop
+    })
   })
 }
 
@@ -522,6 +584,7 @@ function closeSearch(): void {
   matches.value = []
   activeMatchIndex.value = -1
   applySearchDecorations()
+  scheduleLineNumberUpdate()
   editorView?.focus()
 }
 
@@ -580,6 +643,7 @@ defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRat
     ref="shell"
     class="milkdown-editor-shell"
     :class="{
+      'is-readonly': readonly,
       'has-line-numbers': showLineNumbers,
       'has-find-widget': searchOpen,
       'has-replace-widget': searchOpen && replaceOpen
@@ -587,36 +651,32 @@ defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRat
     :style="{ '--milkdown-font-size': `${fontSize}px` }"
   >
     <div v-if="showLineNumbers" class="milkdown-line-numbers" aria-hidden="true">
-      <span v-for="marker in lineMarkers" :key="`${marker.label}-${marker.top}`" :style="{ top: `${marker.top}px` }">{{ marker.label }}</span>
+      <span v-for="marker in lineMarkers" :key="`${marker.label}-${marker.top}`" :style="{ top: `${marker.top}px`, height: `${marker.height}px` }">{{ marker.label }}</span>
     </div>
 
-    <div v-if="searchOpen" ref="findWidget" class="milkdown-find-widget no-drag" @mousedown.stop>
-      <div class="milkdown-find-row">
-        <button class="milkdown-find-toggle" type="button" :title="replaceOpen ? '收起替换' : '展开替换'" @click="replaceOpen = !replaceOpen">
-          {{ replaceOpen ? '⌄' : '›' }}
-        </button>
-        <input ref="findInput" v-model="searchText" type="text" placeholder="查找" spellcheck="false" @keydown="onFindKeydown">
-        <div class="milkdown-find-options">
-          <button type="button" :class="{ active: matchCase }" title="区分大小写" @click="matchCase = !matchCase">Aa</button>
-          <button type="button" :class="{ active: wholeWord }" title="全字匹配" @click="wholeWord = !wholeWord">ab</button>
-          <button type="button" :class="{ active: useRegex }" title="使用正则表达式" @click="useRegex = !useRegex">.*</button>
-          <button type="button" :class="{ active: selectionOnly }" :disabled="!hasEditorSelection && !selectionOnly" title="仅在选区中查找" @click="toggleSelectionOnly">▣</button>
+    <div v-if="searchOpen" ref="findWidget" class="milkdown-find-widget sheep-find-widget no-drag" :class="{ 'is-replacing': replaceOpen }" @mousedown.stop>
+      <div class="milkdown-find-row sheep-find-row sheep-find-search-row">
+        <button class="milkdown-find-toggle sheep-find-expand" :class="{ 'is-expanded': replaceOpen }" type="button" :title="replaceOpen ? '收起替换' : '展开替换'" @click="replaceOpen = !replaceOpen">›</button>
+        <div class="sheep-find-field">
+          <input ref="findInput" v-model="searchText" type="text" placeholder="查找" spellcheck="false" @keydown="onFindKeydown">
+          <span class="milkdown-find-options sheep-find-options">
+            <button type="button" class="sheep-find-option" :class="{ 'is-active': matchCase }" title="区分大小写" @click="matchCase = !matchCase">Aa</button>
+            <button type="button" class="sheep-find-option" :class="{ 'is-active': wholeWord }" title="全字匹配" @click="wholeWord = !wholeWord">ab</button>
+            <button type="button" class="sheep-find-option" :class="{ 'is-active': useRegex }" title="使用正则表达式" @click="useRegex = !useRegex">.*</button>
+          </span>
         </div>
-        <span class="milkdown-find-count" :class="{ empty: searchText && !matches.length }">{{ matchLabel }}</span>
-        <button type="button" title="上一个匹配（Shift + Enter）" :disabled="!matches.length" @click="navigateMatch(-1)">↑</button>
-        <button type="button" title="下一个匹配（Enter）" :disabled="!matches.length" @click="navigateMatch(1)">↓</button>
-        <button type="button" title="关闭（Esc）" @click="closeSearch">×</button>
+        <button type="button" class="sheep-find-icon-button" :class="{ 'is-active': selectionOnly }" :disabled="!hasEditorSelection && !selectionOnly" title="仅在初始选区中查找" @click="toggleSelectionOnly">▣</button>
+        <span class="milkdown-find-count sheep-find-count" :class="{ 'is-empty': searchText && !matches.length }">{{ matchLabel }}</span>
+        <button type="button" class="sheep-find-icon-button" title="上一个匹配项（Shift + Enter）" :disabled="!matches.length" @click="navigateMatch(-1)">↑</button>
+        <button type="button" class="sheep-find-icon-button" title="下一个匹配项（Enter）" :disabled="!matches.length" @click="navigateMatch(1)">↓</button>
+        <button type="button" class="sheep-find-icon-button" title="选择所有匹配项" :disabled="!matches.length" @click="selectEveryMatch">≡</button>
+        <button type="button" class="sheep-find-icon-button sheep-find-close" title="关闭查找（Esc）" @click="closeSearch">×</button>
       </div>
-      <div v-if="replaceOpen" class="milkdown-find-row is-replace">
-        <span class="milkdown-find-toggle-spacer" />
+      <div v-if="replaceOpen" class="milkdown-find-row sheep-find-row sheep-find-replace-row">
+        <span class="sheep-find-spacer" />
         <input ref="replaceInput" v-model="replacementText" type="text" placeholder="替换" spellcheck="false" @keydown="onReplaceKeydown">
-        <div class="milkdown-find-options preserve-option">
-          <button type="button" :class="{ active: preserveCase }" title="保留大小写" @click="preserveCase = !preserveCase">AB</button>
-        </div>
-        <span class="milkdown-find-count" />
-        <button type="button" title="替换当前匹配" :disabled="!matches.length" @click="replaceCurrent">↪</button>
-        <button type="button" title="全部替换" :disabled="!matches.length" @click="replaceEveryMatch">⇉</button>
-        <span class="milkdown-find-close-spacer" />
+        <button type="button" class="sheep-find-text-button" :disabled="!matches.length" @click="replaceCurrent">替换</button>
+        <button type="button" class="sheep-find-text-button" :disabled="!matches.length" @click="replaceEveryMatch">全部替换</button>
       </div>
     </div>
 

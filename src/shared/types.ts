@@ -1,8 +1,6 @@
 export type SceneId = 'general' | 'coding' | 'image'
 export type EnhanceMode = 'conservative' | 'creative'
 export type DisplayMode = 'txt' | 'markdown'
-export type MarkdownViewMode = 'source' | 'split' | 'preview'
-export type DefaultMarkdownView = MarkdownViewMode
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type EditorBackground = 'auto' | 'white' | 'black' | 'eye-care' | 'paper' | 'kraft'
 export type EditorPattern = 'none' | 'grid-large' | 'grid-small' | 'lines' | 'waves'
@@ -90,7 +88,6 @@ export interface AppSettings {
   defaultScene: SceneId
   defaultModelConfigId: string | null
   defaultDisplayMode: DisplayMode
-  defaultMarkdownView: DefaultMarkdownView
   editorBackground: EditorBackground
   editorPattern: EditorPattern
   showLineNumbers: boolean

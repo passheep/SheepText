@@ -658,3 +658,136 @@
   .milkdown-find-row.is-replace .preserve-option{display:none}
   .milkdown-find-row.is-replace input,.milkdown-find-row>input{grid-column:2}
 }
+
+
+/* 2026-09-11 0.3.0 体验优化 */
+.history-item.is-virtual{height:64px!important}
+.history-item-open{justify-content:flex-start!important;gap:0!important;padding:6px 10px 3px!important}
+.history-item-top{grid-template-columns:auto minmax(0,1fr) 30px}
+.history-item-bottom{margin-top:auto;margin-bottom:0;min-height:14px!important;line-height:14px!important}
+.history-item-doc-icon{display:none!important}
+
+.floating-command-hint.format-hint{width:auto!important;min-width:36px!important;padding:0 7px;color:var(--primary)!important;font:800 9px/1 var(--font-ui);letter-spacing:-.02em}
+.floating-command-hint.scene-hint{color:var(--primary)!important}
+
+.editor-layout.markdown.view-source,.editor-layout.markdown.view-preview,.editor-layout.markdown.view-split{grid-template-columns:minmax(0,1fr)}
+.milkdown-editor-shell.view-source .sheep-milkdown-editor .ProseMirror{width:min(100%,1120px)}
+.milkdown-editor-shell.view-split .sheep-milkdown-editor .ProseMirror{width:min(100%,1040px)}
+.milkdown-editor-shell.view-preview .sheep-milkdown-editor .ProseMirror{width:min(100%,900px)}
+
+.sheep-milkdown-editor>.milkdown{
+  --crepe-color-background:transparent;
+  --crepe-color-on-background:var(--text-primary);
+  --crepe-color-surface:var(--surface-elevated);
+  --crepe-color-surface-low:var(--surface);
+  --crepe-color-on-surface:var(--text-primary);
+  --crepe-color-on-surface-variant:var(--text-secondary);
+  --crepe-color-outline:color-mix(in srgb,var(--text-primary) 72%,var(--surface));
+  --crepe-color-primary:var(--primary);
+  --crepe-color-secondary:var(--primary-soft);
+  --crepe-color-on-secondary:var(--text-primary);
+  --crepe-color-inverse:var(--text-primary);
+  --crepe-color-on-inverse:var(--surface-elevated);
+  --crepe-color-inline-code:var(--md-code);
+  --crepe-color-error:var(--danger);
+  --crepe-color-hover:var(--surface-hover);
+  --crepe-color-selected:var(--selection);
+  --crepe-color-inline-area:color-mix(in srgb,var(--surface-elevated) 86%,var(--primary-soft));
+}
+.sheep-milkdown-editor .ProseMirror{padding-right:72px;padding-left:72px}
+.milkdown-editor-shell.has-line-numbers .sheep-milkdown-editor .ProseMirror{padding-left:92px}
+.sheep-milkdown-editor .milkdown-list-item-block li{gap:5px;color:var(--text-primary)}
+.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper{width:20px;height:calc(var(--milkdown-font-size,15px) * 1.78);color:var(--text-primary)}
+.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper>.label{width:20px;height:calc(var(--milkdown-font-size,15px) * 1.78);padding:2px 0;color:var(--text-primary)}
+.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper svg{fill:var(--text-primary)}
+
+.sheep-milkdown-editor .milkdown-block-handle{gap:1px;margin-left:-6px}
+.milkdown-editor-shell.has-line-numbers .sheep-milkdown-editor .milkdown-block-handle{margin-left:-1px}
+.sheep-milkdown-editor .milkdown-block-handle .operation-item{width:25px;height:25px;padding:3px}
+.sheep-milkdown-editor .milkdown-block-handle .operation-item svg{width:18px;height:18px}
+.sheep-milkdown-editor .milkdown-slash-menu{max-width:min(270px,calc(100vw - 28px));border-radius:10px}
+.sheep-milkdown-editor .milkdown-slash-menu .tab-group{padding:8px 8px 0}
+.sheep-milkdown-editor .milkdown-slash-menu .tab-group ul{gap:5px;padding:5px 6px}
+.sheep-milkdown-editor .milkdown-slash-menu .tab-group ul li{padding:4px 7px;font-size:11px;line-height:17px}
+.sheep-milkdown-editor .milkdown-slash-menu .menu-groups{max-height:min(310px,calc(100vh - 150px));padding:0 8px 8px}
+.sheep-milkdown-editor .milkdown-slash-menu .menu-groups .menu-group h6{padding:8px 7px 5px;font-size:10px;line-height:16px}
+.sheep-milkdown-editor .milkdown-slash-menu .menu-groups .menu-group li{min-width:176px;gap:9px;padding:7px;font-size:11px}
+.sheep-milkdown-editor .milkdown-slash-menu .menu-groups .menu-group li svg{width:17px;height:17px}
+.sheep-milkdown-editor .milkdown-slash-menu .menu-groups .menu-group li>span{font-size:11px;line-height:17px}
+
+.milkdown-line-numbers{left:max(8px,calc(50% - 490px + 16px));width:36px}
+.milkdown-line-numbers span{display:flex;align-items:flex-start;justify-content:flex-end;right:0;width:36px;padding:3px 7px 0 0;transform:none;line-height:1.35}
+
+.milkdown-find-widget{position:sticky;top:10px;z-index:85;width:min(760px,calc(100% - 28px));margin:10px 14px 0 auto;padding:7px;border:1px solid var(--border-strong);border-radius:12px;background:color-mix(in srgb,var(--surface-elevated) 96%,transparent);box-shadow:0 14px 38px rgba(25,22,34,.22);backdrop-filter:blur(22px);user-select:none}
+.milkdown-find-row{grid-template-columns:24px minmax(112px,1fr) 28px 50px repeat(3,28px);gap:5px}
+.milkdown-find-row.is-replace{grid-template-columns:24px minmax(130px,1fr) auto 50px 45px 60px 28px;margin-top:6px}
+.milkdown-find-row>input{height:30px;padding:0 9px;border-radius:7px;background:var(--field-bg)!important;font-size:11px}
+.milkdown-find-options{gap:1px}
+.milkdown-find-options button{width:24px;height:24px;font-size:9px}
+.milkdown-find-row>button{width:28px;height:28px;border-radius:6px;font-size:11px}
+.milkdown-find-toggle{width:24px!important;font-size:20px!important}
+.milkdown-find-count{min-width:50px;font-size:9px}
+
+.result-content{overflow:hidden}
+.result-content .markdown-preview{height:100%;overflow:auto;padding:18px 22px!important}
+.result-content>pre{height:100%;overflow:auto}
+
+@media(max-width:680px){
+  .sheep-milkdown-editor .ProseMirror{padding-right:48px;padding-left:48px}
+  .milkdown-editor-shell.has-line-numbers .sheep-milkdown-editor .ProseMirror{padding-left:72px}
+  .milkdown-line-numbers{left:7px;width:32px}
+  .milkdown-line-numbers span{width:32px;padding-right:5px}
+  .sheep-milkdown-editor .milkdown-block-handle{margin-left:-4px}
+  .milkdown-editor-shell.has-line-numbers .sheep-milkdown-editor .milkdown-block-handle{margin-left:0}
+  .milkdown-find-widget{width:calc(100% - 20px);margin-right:10px;margin-left:10px}
+  .milkdown-find-row{grid-template-columns:22px minmax(88px,1fr) 26px 44px repeat(3,26px);gap:3px}
+  .milkdown-find-row.is-replace{grid-template-columns:22px minmax(94px,1fr) auto 44px 42px 55px 26px;gap:3px}
+}
+@media(max-width:500px){
+  .milkdown-find-row{grid-template-columns:22px minmax(92px,1fr) 44px repeat(3,26px)}
+  .milkdown-find-options{display:none}
+  .milkdown-find-row.is-replace{grid-template-columns:22px minmax(92px,1fr) 42px 55px 26px}
+  .milkdown-find-row.is-replace .preserve-option{display:none}
+}
+
+/* Markdown 三种工作区均使用 Milkdown，分栏右侧为只读即时预览。 */
+.editor-layout.markdown.view-split{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.editor-layout.markdown.view-split .editor-pane{border-right:1px solid var(--border)}
+.milkdown-preview-pane{background:color-mix(in srgb,var(--surface) 54%,transparent)}
+.milkdown-preview-pane .milkdown-editor-shell{background:transparent}
+.milkdown-editor-shell.is-readonly .milkdown-block-handle,
+.milkdown-editor-shell.is-readonly .milkdown-slash-menu{display:none!important}
+.milkdown-editor-shell.is-readonly .sheep-milkdown-editor .ProseMirror{cursor:default}
+
+.milkdown-find-row.sheep-find-search-row{grid-template-columns:24px minmax(112px,1fr) 28px 50px repeat(4,28px)}
+.milkdown-find-row.sheep-find-replace-row{display:grid;grid-template-columns:24px minmax(130px,1fr) auto auto;margin-top:6px}
+@media(max-width:680px){
+  .milkdown-find-row.sheep-find-search-row{grid-template-columns:22px minmax(88px,1fr) 26px 44px repeat(4,26px);gap:3px}
+  .milkdown-find-row.sheep-find-replace-row{grid-template-columns:22px minmax(94px,1fr) auto auto;gap:3px}
+}
+@media(max-width:500px){
+  .editor-layout.markdown.view-split{grid-template-columns:minmax(0,1fr)}
+  .editor-layout.markdown.view-split .preview-pane{display:none}
+  .milkdown-find-row.sheep-find-search-row{grid-template-columns:22px minmax(92px,1fr) 44px repeat(4,26px)}
+  .milkdown-find-row.sheep-find-replace-row{grid-template-columns:22px minmax(92px,1fr) auto auto}
+}
+
+
+/* 2026-09-11 Markdown 单一 Milkdown 工作区与搜索样式统一 */
+.sheep-milkdown-editor .ProseMirror{width:min(100%,980px)}
+.sheep-milkdown-editor .ProseMirror>ul,
+.sheep-milkdown-editor .ProseMirror>ol{margin-left:0;padding-left:0}
+.sheep-milkdown-editor .milkdown-list-item-block .children>ul,
+.sheep-milkdown-editor .milkdown-list-item-block .children>ol{padding-left:1.45em}
+
+.milkdown-find-widget.sheep-find-widget{position:sticky;top:8px;display:block;width:min(520px,calc(100% - 24px));margin:8px 12px 0 auto;padding:7px;border-radius:12px;box-shadow:0 14px 38px rgba(25,22,34,.22)}
+.milkdown-find-widget .milkdown-find-row.sheep-find-search-row{grid-template-columns:24px minmax(112px,1fr) 28px 50px repeat(4,28px);gap:5px}
+.milkdown-find-widget .milkdown-find-row.sheep-find-replace-row{display:grid;grid-template-columns:24px minmax(130px,1fr) auto auto;gap:5px;margin-top:6px}
+.milkdown-find-widget .sheep-find-options{display:flex}
+@media(max-width:620px){
+  .milkdown-find-widget.sheep-find-widget{width:calc(100% - 16px);margin:8px 8px 0 auto;padding:6px}
+  .milkdown-find-widget .milkdown-find-row.sheep-find-search-row{grid-template-columns:22px minmax(88px,1fr) 26px 44px repeat(4,26px);gap:3px}
+  .milkdown-find-widget .milkdown-find-row.sheep-find-replace-row{grid-template-columns:22px minmax(94px,1fr) auto auto;gap:3px}
+  .milkdown-find-widget .sheep-find-icon-button{width:26px}
+  .milkdown-find-widget .sheep-find-count{font-size:8px}
+}

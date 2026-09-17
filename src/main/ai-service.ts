@@ -17,14 +17,14 @@ type ProtectedText = {
 }
 
 const SCENE_RULES: Record<SceneId, string> = {
-  general: '梳理目标、背景、对象、表达顺序和输出要求。必须保留原意、事实、语气与明确限制。',
+  general: '梳理目标、背景、对象、表达顺序和输出要求。必须保留原意、事实、语气与明确限制；重点改善措辞、句式、层次和可读性，使改写结果能直观看出优化。',
   coding: '梳理任务范围、业务约束、边界情况和验证要求。必须保留阶段要求、代码、路径、标识符及用户限制，不能虚构项目事实。',
   image: '完善主体、动作、构图、环境、光线、色彩与风格。必须保留用户明确指定的主体、画风、比例、文字及排除项，不添加特定平台参数语法。'
 }
 
 const MODE_RULES: Record<EnhanceMode, string> = {
-  conservative: '采用保守增强：澄清歧义、改善表达和组织结构，尽量不增加新要求；原文已经完整时允许基本保持原样。',
-  creative: '采用创意重写：在明确约束内补充真正有用的细节和连贯方向，但不能把猜测写成事实，也不能把所有可选方向都变成必做事项。'
+  conservative: '采用保守增强：在不改变原意、不虚构信息并尽量不增加新要求的前提下，至少完成一项有意义的措辞、句式或结构优化；不要仅原样返回输入。',
+  creative: '采用创意重写：在明确约束内补充真正有用的细节和连贯方向，并明显改善表达与结构，但不能把猜测写成事实，也不能把所有可选方向都变成必做事项。'
 }
 
 export function buildEnhancePrompt(scene: SceneId, mode: EnhanceMode, isSelection: boolean): string {
@@ -108,6 +108,9 @@ export class AiService {
       )
       const resultText = protectedText.restore(response.text.trim())
       if (!resultText) throw new Error('模型返回了空结果，原文未作修改')
+      if (resultText.trim() === request.text.trim()) {
+        throw new Error('模型返回内容与原文相同，请尝试创意重写或调整模型配置')
+      }
       return {
         requestId: request.requestId,
         text: resultText,

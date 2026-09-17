@@ -13,7 +13,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultScene: 'general',
   defaultModelConfigId: null,
   defaultDisplayMode: 'txt',
-  defaultMarkdownView: 'split',
   editorBackground: 'auto',
   editorPattern: 'grid-large',
   showLineNumbers: false

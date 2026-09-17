@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defaultKeymap, history, historyKeymap, redo, undo } from '@codemirror/commands'
+import { copyLineDown, defaultKeymap, history, historyKeymap, redo, undo } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import {
@@ -13,12 +13,11 @@ import {
   type DecorationSet, type Panel, type ViewUpdate
 } from '@codemirror/view'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { DisplayMode, MarkdownViewMode, ToastPayload } from '../../../shared/types'
+import type { DisplayMode, ToastPayload } from '../../../shared/types'
 
 const props = defineProps<{
   modelValue: string
   displayMode: DisplayMode
-  markdownView: MarkdownViewMode
   fontSize: number
   showLineNumbers: boolean
   draftId: string
@@ -195,7 +194,7 @@ class InlineImageWidget extends WidgetType {
 }
 
 function isLivePreview(): boolean {
-  return props.displayMode === 'markdown' && props.markdownView === 'preview'
+  return props.displayMode === 'markdown'
 }
 
 function buildLiveDecorations(editorView: EditorView): DecorationSet {
@@ -989,7 +988,7 @@ onMounted(() => {
         replace: '替换', 'replace all': '全部替换', close: '关闭'
       }),
       history(), search({ top: true, createPanel: createFindPanel }),
-      keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+      keymap.of([{ key: 'Ctrl-d', run: copyLineDown }, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.lineWrapping,
       placeholder('在这里输入、粘贴和整理文字……'),
       editorTheme,
@@ -1065,7 +1064,6 @@ watch(() => props.modelValue, (value) => {
 watch(() => props.displayMode, (mode) => {
   view?.dispatch({ effects: [languageCompartment.reconfigure(languageExtension(mode)), livePreviewCompartment.reconfigure(previewExtension())] })
 })
-watch(() => props.markdownView, () => { view?.dispatch({ effects: livePreviewCompartment.reconfigure(previewExtension()) }) })
 watch(() => props.fontSize, (size) => { localFontSize = size; view?.dispatch({ effects: fontCompartment.reconfigure(fontExtension(size)) }) })
 watch(() => props.showLineNumbers, (show) => { view?.dispatch({ effects: gutterCompartment.reconfigure(gutterExtension(show)) }) })
 

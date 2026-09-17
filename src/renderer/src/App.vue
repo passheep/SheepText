@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {
-  ChevronDown, Code2, Columns2, Copy, Eye, FileDown, FilePlus2, FolderOpen,
+  ChevronDown, Code2, Copy, FileDown, FilePlus2, FolderOpen,
   History, Image, Maximize2, MessageSquareText, Minus, PanelTop, Pin, Plus,
   Settings as SettingsIcon, Sparkles, Text, WandSparkles, X
 } from '@lucide/vue'
@@ -8,14 +8,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { HISTORY_PAGE_SIZE, SAVE_DEBOUNCE_MS, SCENE_LABELS } from '../../shared/constants'
 import type {
   AiRequest, AiResult, AppSettings, Draft, DraftSummary, EnhanceMode, ModelConfigPublic,
-  DockSide, MarkdownViewMode, SceneId, ToastPayload, WindowBootstrap, WindowInteractionState
+  DockSide, SceneId, ToastPayload, WindowBootstrap, WindowInteractionState
 } from '../../shared/types'
 import AiResultPanel from './components/AiResultPanel.vue'
 import type { SelectOption } from './components/BaseSelect.vue'
 import BaseButton from './components/BaseButton.vue'
 import HistoryDrawer from './components/HistoryDrawer.vue'
 import IconButton from './components/IconButton.vue'
-import MarkdownPreview from './components/MarkdownPreview.vue'
 import MilkdownEditor from './components/MilkdownEditor.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import TextEditor from './components/TextEditor.vue'
@@ -85,13 +84,7 @@ const settingsOpen = ref(false)
 const settingsTab = ref<'general' | 'models' | 'shortcuts' | 'storage' | 'about'>('general')
 const newMenuOpen = ref(false)
 const sceneMenuOpen = ref(false)
-const markdownMenuOpen = ref(false)
 const openSelectCount = ref(0)
-const markdownView = ref<MarkdownViewMode>('split')
-const markdownPreview = ref<{ setScrollRatio: (ratio: number) => void } | null>(null)
-const canUseSplit = ref(true)
-const splitRatio = ref(0.54)
-const draggingSplit = ref(false)
 let settingsSaveTimer: ReturnType<typeof setTimeout> | null = null
 const toast = ref<(ToastPayload & { id: number }) | null>(null)
 const closing = ref(false)
@@ -125,7 +118,7 @@ const hasSelection = computed(() => selection.to > selection.from)
 const validSelectionLength = computed(() => hasSelection.value ? selection.text.trim().length : 0)
 const characterCount = computed(() => draft.value?.content.length ?? 0)
 const currentEditorKind = computed<'text' | 'milkdown'>(() =>
-  draft.value?.displayMode === 'markdown' && markdownView.value === 'preview' ? 'milkdown' : 'text'
+  draft.value?.displayMode === 'markdown' ? 'milkdown' : 'text'
 )
 const themeAttribute = computed(() => settings.value?.theme ?? 'system')
 const themeStyle = computed(() => {
@@ -150,7 +143,7 @@ const interactionState = computed<WindowInteractionState>(() => ({
   interacting: editorFocused.value,
   composing: isComposing.value,
   drawerOpen: historyOpen.value,
-  menuOpen: newMenuOpen.value || sceneMenuOpen.value || markdownMenuOpen.value || openSelectCount.value > 0 || settingsOpen.value,
+  menuOpen: newMenuOpen.value || sceneMenuOpen.value || openSelectCount.value > 0 || settingsOpen.value,
   aiPreviewOpen: ai.open
 }))
 
@@ -160,8 +153,6 @@ onMounted(async () => {
     applyBootstrap(bootstrap)
     registerEvents()
     await nextTick()
-    syncMarkdownLayout()
-    window.addEventListener('resize', syncMarkdownLayout)
     window.addEventListener('keydown', handleGlobalShortcut, true)
     document.addEventListener('pointerdown', handleOutsidePointerDown, true)
     editor.value?.focus()
@@ -176,11 +167,8 @@ onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
   if (toastTimer) clearTimeout(toastTimer)
   if (settingsSaveTimer) clearTimeout(settingsSaveTimer)
-  window.removeEventListener('resize', syncMarkdownLayout)
   window.removeEventListener('keydown', handleGlobalShortcut, true)
   document.removeEventListener('pointerdown', handleOutsidePointerDown, true)
-  window.removeEventListener('mousemove', onSplitMouseMove)
-  window.removeEventListener('mouseup', stopSplitResize)
   unsubscribers.forEach((unsubscribe) => unsubscribe())
 })
 
@@ -202,7 +190,6 @@ function applyBootstrap(bootstrap: WindowBootstrap): void {
   alwaysOnTop.value = bootstrap.window.alwaysOnTop
   isDocked.value = bootstrap.window.isDocked
   dockSide.value = bootstrap.window.dockSide
-  markdownView.value = bootstrap.draft.displayMode === 'markdown' ? bootstrap.settings.defaultMarkdownView : 'split'
   applyTheme()
 }
 
@@ -244,35 +231,6 @@ function applyTheme(): void {
   root?.style.setProperty('--selection', 'color-mix(in srgb, ' + color + ' 22%, transparent)')
 }
 
-function syncMarkdownLayout(): void {
-  canUseSplit.value = window.innerWidth >= 840
-  if (!canUseSplit.value && markdownView.value === 'split') markdownView.value = 'source'
-}
-
-function setMarkdownView(mode: MarkdownViewMode): void {
-  if (mode === 'split' && !canUseSplit.value) return
-  markdownView.value = mode
-  markdownMenuOpen.value = false
-}
-
-function onEditorScroll(ratio: number): void {
-  markdownPreview.value?.setScrollRatio(ratio)
-}
-
-function onPreviewScroll(ratio: number): void {
-  editor.value?.setScrollRatio(ratio)
-}
-function toggleMarkdownTask(index: number): void {
-  if (!draft.value || draft.value.displayMode !== 'markdown') return
-  let current = -1
-  const updated = draft.value.content.replace(/^(\s*[-+*]\s+)\[([ xX])\](\s+)/gm, (full, prefix: string, checked: string, suffix: string) => {
-    current += 1
-    if (current !== index) return full
-    return prefix + (checked.toLowerCase() === 'x' ? '[ ]' : '[x]') + suffix
-  })
-  if (updated !== draft.value.content) onContentChanged(updated)
-}
-
 function onFontSizeChange(size: number): void {
   if (!settings.value || settings.value.fontSize === size) return
   settings.value = { ...settings.value, fontSize: size }
@@ -301,33 +259,10 @@ function createSettingsSnapshot(source: AppSettings): AppSettings {
     defaultScene: source.defaultScene,
     defaultModelConfigId: source.defaultModelConfigId ? String(source.defaultModelConfigId) : null,
     defaultDisplayMode: source.defaultDisplayMode,
-    defaultMarkdownView: source.defaultMarkdownView,
     editorBackground: source.editorBackground,
     editorPattern: source.editorPattern,
     showLineNumbers: Boolean(source.showLineNumbers)
   }
-}
-
-function startSplitResize(event: MouseEvent): void {
-  if (!canUseSplit.value) return
-  event.preventDefault()
-  draggingSplit.value = true
-  window.addEventListener('mousemove', onSplitMouseMove)
-  window.addEventListener('mouseup', stopSplitResize)
-}
-
-function onSplitMouseMove(event: MouseEvent): void {
-  if (!draggingSplit.value) return
-  const root = document.querySelector('.editor-layout') as HTMLElement | null
-  if (!root) return
-  const rect = root.getBoundingClientRect()
-  splitRatio.value = Math.max(0.28, Math.min(0.72, (event.clientX - rect.left) / rect.width))
-}
-
-function stopSplitResize(): void {
-  draggingSplit.value = false
-  window.removeEventListener('mousemove', onSplitMouseMove)
-  window.removeEventListener('mouseup', stopSplitResize)
 }
 
 function onContentChanged(content: string): void {
@@ -443,7 +378,6 @@ function handleOutsidePointerDown(event: PointerEvent): void {
   const target = event.target as HTMLElement
   if (newMenuOpen.value && !target.closest('.new-draft-group')) newMenuOpen.value = false
   if (sceneMenuOpen.value && !target.closest('.scene-control')) sceneMenuOpen.value = false
-  if (markdownMenuOpen.value && !target.closest('.mode-switch')) markdownMenuOpen.value = false
 }
 
 function handleGlobalShortcut(event: KeyboardEvent): void {
@@ -496,8 +430,6 @@ function setCurrentDraft(value: Draft): void {
   lastSavedVersion.value = value.version
   saveState.value = 'saved'
   Object.assign(selection, { from: 0, to: 0, text: '' })
-  markdownView.value = value.displayMode === 'markdown' ? (settings.value?.defaultMarkdownView ?? 'split') : 'split'
-  syncMarkdownLayout()
 }
 
 async function loadHistory(reset: boolean): Promise<void> {
@@ -600,7 +532,6 @@ function setScene(value: string): void {
 function setDisplayMode(value: 'txt' | 'markdown'): void {
   if (!draft.value || draft.value.displayMode === value) return
   draft.value.displayMode = value
-  if (value === 'markdown') markdownView.value = settings.value?.defaultMarkdownView ?? 'preview'
   bumpVersionAndSave()
   nextTick(() => editor.value?.focus())
 }
@@ -853,22 +784,24 @@ function cleanError(error: unknown): string {
 
       <main class="workspace" :class="[{ 'has-result': ai.open }, ...editorSurfaceClass]">
         <div class="floating-command floating-command-left no-drag">
-          <span class="floating-command-hint" aria-hidden="true"><Text :size="15" /></span>
+          <span class="floating-command-hint format-hint" :title="draft.displayMode === 'markdown' ? '当前格式：Markdown' : '当前格式：TXT'">
+            <Text v-if="draft.displayMode === 'txt'" :size="16" />
+            <Code2 v-else :size="16" />
+          </span>
           <div class="command-left">
-          <div class="command-group mode-switch" aria-label="编辑模式" @mouseenter="draft.displayMode === 'markdown' && (markdownMenuOpen = true)" @mouseleave="markdownMenuOpen = false">
+          <div class="command-group mode-switch" aria-label="文稿格式">
             <button :class="{ active: draft.displayMode === 'txt' }" @click="setDisplayMode('txt')"><Text :size="15" />TXT</button>
             <button :class="{ active: draft.displayMode === 'markdown' }" @click="setDisplayMode('markdown')"><Code2 :size="15" />Markdown</button>
-            <Transition name="popover"><div v-if="draft.displayMode === 'markdown' && markdownMenuOpen" class="markdown-workspace-menu">
-              <button :class="{ active: markdownView === 'source' }" @click="setMarkdownView('source')"><Code2 :size="15" />源码</button>
-              <button :class="{ active: markdownView === 'split' }" :disabled="!canUseSplit" :title="canUseSplit ? '分栏' : '窗口太窄，暂不可使用分栏'" @click="setMarkdownView('split')"><Columns2 :size="15" />分栏</button>
-              <button :class="{ active: markdownView === 'preview' }" @click="setMarkdownView('preview')"><Eye :size="15" />预览</button>
-            </div></Transition>
           </div>
           <span class="scope-chip" :class="{ selected: hasSelection }">{{ hasSelection ? '已选 ' + selection.text.length.toLocaleString('zh-CN') + ' 字' : characterCount.toLocaleString('zh-CN') + ' 字' }}</span>
           </div>
         </div>
         <div class="floating-command floating-command-right no-drag">
-          <span class="floating-command-hint" aria-hidden="true"><Sparkles :size="15" /></span>
+          <span class="floating-command-hint scene-hint" :title="'当前场景：' + SCENE_LABELS[draft.scene]">
+            <MessageSquareText v-if="draft.scene === 'general'" :size="16" />
+            <Code2 v-else-if="draft.scene === 'coding'" :size="16" />
+            <Image v-else :size="16" />
+          </span>
           <div class="command-right">
           <div class="scene-control" @mouseenter="sceneMenuOpen = true" @mouseleave="sceneMenuOpen = false">
             <button type="button" class="scene-button" :title="'当前场景：' + SCENE_LABELS[draft.scene]" @focus="sceneMenuOpen = true" @click="sceneMenuOpen = !sceneMenuOpen">
@@ -885,10 +818,10 @@ function cleanError(error: unknown): string {
           <button type="button" class="enhance-icon-button" title="创意重写：更大胆地优化表达" :disabled="ai.loading" @mousedown.prevent @click="runEnhance('creative')"><Sparkles :size="18" /><span class="action-label">创意重写</span></button>
           </div>
         </div>
-        <div class="editor-layout" :class="[`view-${markdownView}`, { markdown: draft.displayMode === 'markdown' }]" :style="{ '--split-left': `${splitRatio}fr`, '--split-right': `${1 - splitRatio}fr` }">
+        <div class="editor-layout" :class="{ markdown: draft.displayMode === 'markdown' }">
           <section class="editor-pane">
             <MilkdownEditor
-              v-if="draft.displayMode === 'markdown' && markdownView === 'preview'"
+              v-if="draft.displayMode === 'markdown'"
               :key="`${draft.id}-milkdown`"
               ref="editor"
               :model-value="draft.content"
@@ -900,16 +833,14 @@ function cleanError(error: unknown): string {
               @focus-change="editorFocused = $event"
               @composition-change="isComposing = $event"
               @font-size-change="onFontSizeChange"
-              @scroll-change="onEditorScroll"
               @toast="showToast"
             />
             <TextEditor
-              v-else
+              v-else-if="draft.displayMode === 'txt'"
               :key="`${draft.id}-text`"
               ref="editor"
               :model-value="draft.content"
               :display-mode="draft.displayMode"
-              :markdown-view="markdownView"
               :font-size="settings.fontSize"
               :show-line-numbers="settings.showLineNumbers"
               :draft-id="draft.id"
@@ -918,18 +849,13 @@ function cleanError(error: unknown): string {
               @focus-change="editorFocused = $event"
               @composition-change="isComposing = $event"
               @font-size-change="onFontSizeChange"
-              @scroll-change="onEditorScroll"
               @toast="showToast"
             />
-            <div v-if="!draft.content && !(draft.displayMode === 'markdown' && markdownView === 'preview')" class="starter-hints no-drag">
+            <div v-if="!draft.content && draft.displayMode === 'txt'" class="starter-hints no-drag">
               <span>试试这样开始</span>
               <button @click="editor?.focus()"><Code2 :size="15" />整理一段编程需求</button>
               <button @click="editor?.focus()"><Image :size="15" />完善一个生图想法</button>
             </div>
-          </section>
-          <div v-if="draft.displayMode === 'markdown' && markdownView === 'split'" class="split-divider no-drag" :class="{ 'is-dragging': draggingSplit }" title="拖动调整左右宽度" @mousedown="startSplitResize" />
-          <section v-if="draft.displayMode === 'markdown' && markdownView === 'split'" class="preview-pane">
-            <MarkdownPreview ref="markdownPreview" :content="draft.content" @scroll-change="onPreviewScroll" @task-toggle="toggleMarkdownTask" />
           </section>
         </div>
 

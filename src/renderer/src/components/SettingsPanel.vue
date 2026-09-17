@@ -59,11 +59,6 @@ const displayModeOptions: SelectOption[] = [
   { value: 'txt', label: 'TXT', description: '纯文本格式，兼容性最好' },
   { value: 'markdown', label: 'Markdown', description: '支持标题、列表和代码块' }
 ]
-const markdownViewOptions: SelectOption[] = [
-  { value: 'source', label: '源码', description: '只编辑 Markdown 源码' },
-  { value: 'split', label: '分栏', description: '左侧源码，右侧实时预览' },
-  { value: 'preview', label: '预览', description: '单栏即时渲染，光标所在行显示源码' }
-]
 const editorBackgroundOptions: SelectOption[] = [
   { value: 'auto', label: '跟随界面', description: '自动匹配当前明暗主题' },
   { value: 'white', label: '纯白', description: '干净明亮的白色画布' },
@@ -278,7 +273,6 @@ function cleanError(error: unknown): string {
                     <label class="field-block"><span>默认 AI 场景</span><BaseSelect v-model="settingsDraft.defaultScene" :options="sceneOptions" /></label>
                     <label class="field-block"><span>默认模型</span><BaseSelect v-model="settingsDraft.defaultModelConfigId" :options="defaultModelOptions" placeholder="不设默认模型" /></label>
                     <label class="field-block"><span>新建文稿默认格式</span><BaseSelect v-model="settingsDraft.defaultDisplayMode" :options="displayModeOptions" /></label>
-                    <label class="field-block"><span>默认 Markdown 编辑方式</span><BaseSelect v-model="settingsDraft.defaultMarkdownView" :options="markdownViewOptions" /></label>
                   </div>
                 </section>
 
@@ -293,7 +287,7 @@ function cleanError(error: unknown): string {
                       <button v-for="color in themeColorPresets" :key="color.value" type="button" class="theme-swatch" :class="{ active: settingsDraft.themeColor === color.value }" :title="color.label" :style="{ backgroundColor: color.value }" @click="settingsDraft.themeColor = color.value" />
                       <label class="custom-color-swatch" title="自定义主题色"><input v-model="settingsDraft.themeColor" type="color" /><span>自定义</span></label><code>{{ settingsDraft.themeColor }}</code>
                     </div></div>
-                    <label class="setting-row full appearance-toggle"><span><strong>显示行号</strong><small>在 TXT、Markdown 源码和即时预览编辑区左侧显示行号</small></span><ToggleSwitch v-model="settingsDraft.showLineNumbers" /></label>
+                    <label class="setting-row full appearance-toggle"><span><strong>显示行号</strong><small>在 TXT 和 Milkdown Markdown 编辑区左侧显示行号</small></span><ToggleSwitch v-model="settingsDraft.showLineNumbers" /></label>
                   </div>
                 </section>
 
@@ -347,7 +341,7 @@ function cleanError(error: unknown): string {
               </div>
             </div>
 
-            <div v-else-if="activeTab === 'shortcuts'" class="settings-page info-page"><div class="settings-scroll"><div class="info-hero"><Keyboard :size="24" /><div><h3>键盘快捷键</h3><p>在编辑窗口内随时使用，减少鼠标操作。</p></div></div><div class="shortcut-list"><div><span>新建文稿</span><kbd>Ctrl</kbd><b>+</b><kbd>N</kbd></div><div><span>新建窗口</span><kbd>Ctrl</kbd><b>+</b><kbd>Shift</kbd><b>+</b><kbd>N</kbd></div><div><span>搜索当前文本</span><kbd>Ctrl</kbd><b>+</b><kbd>F</kbd></div><div><span>撤销 / 重做</span><kbd>Ctrl</kbd><b>+</b><kbd>Z</kbd><em>/</em><kbd>Ctrl</kbd><b>+</b><kbd>Y</kbd></div><div><span>调整编辑字号</span><kbd>Ctrl</kbd><b>+</b><span>鼠标滚轮</span></div></div></div></div>
+            <div v-else-if="activeTab === 'shortcuts'" class="settings-page info-page"><div class="settings-scroll"><div class="info-hero"><Keyboard :size="24" /><div><h3>键盘快捷键</h3><p>在编辑窗口内随时使用，减少鼠标操作。</p></div></div><div class="shortcut-list"><div><span>新建文稿</span><kbd>Ctrl</kbd><b>+</b><kbd>N</kbd></div><div><span>新建窗口</span><kbd>Ctrl</kbd><b>+</b><kbd>Shift</kbd><b>+</b><kbd>N</kbd></div><div><span>搜索当前文本</span><kbd>Ctrl</kbd><b>+</b><kbd>F</kbd></div><div><span>复制本行到下一行</span><kbd>Ctrl</kbd><b>+</b><kbd>D</kbd></div><div><span>撤销 / 重做</span><kbd>Ctrl</kbd><b>+</b><kbd>Z</kbd><em>/</em><kbd>Ctrl</kbd><b>+</b><kbd>Y</kbd></div><div><span>调整编辑字号</span><kbd>Ctrl</kbd><b>+</b><span>鼠标滚轮</span></div></div></div></div>
 
             <div v-else-if="activeTab === 'storage'" class="settings-page info-page"><div class="settings-scroll"><div class="info-hero"><HardDrive :size="24" /><div><h3>数据存储</h3><p>草稿与设置保存在本机，可随时制作备份或导出可读数据。</p></div></div><div class="storage-grid"><div class="storage-card"><span>本地存储占用</span><strong>{{ storageLoading ? '正在计算…' : storageInfo?.formattedSize ?? '—' }}</strong></div><div class="storage-card full"><span>存储位置</span><code :title="storageInfo?.path">{{ storageInfo?.path ?? '正在读取…' }}</code></div></div><div class="storage-actions"><BaseButton variant="secondary" :loading="storageAction === 'backup'" @click="backupData"><template #icon><Archive :size="16" /></template>手动备份数据库</BaseButton><BaseButton variant="secondary" :loading="storageAction === 'export'" @click="exportData"><template #icon><Download :size="16" /></template>导出数据（JSON）</BaseButton></div><p class="storage-note">数据库备份适合完整迁移；JSON 导出不包含 API Key 明文，可用于查看和长期留存。</p></div></div>
 

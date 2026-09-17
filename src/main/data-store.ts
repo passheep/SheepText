@@ -217,7 +217,6 @@ export class DataStore {
         ? merged.defaultModelConfigId
         : null,
       defaultDisplayMode: merged.defaultDisplayMode === 'markdown' ? 'markdown' : 'txt',
-      defaultMarkdownView: merged.defaultMarkdownView === 'source' || merged.defaultMarkdownView === 'preview' ? merged.defaultMarkdownView : 'split',
       editorBackground: merged.editorBackground === 'white' || merged.editorBackground === 'black'
         || merged.editorBackground === 'eye-care' || merged.editorBackground === 'paper' || merged.editorBackground === 'kraft'
         ? merged.editorBackground
