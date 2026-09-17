@@ -224,8 +224,7 @@ export class DataStore {
       editorPattern: merged.editorPattern === 'grid-large' || merged.editorPattern === 'grid-small'
         || merged.editorPattern === 'lines' || merged.editorPattern === 'waves'
         ? merged.editorPattern
-        : 'none',
-      showLineNumbers: booleanValue(merged.showLineNumbers, DEFAULT_SETTINGS.showLineNumbers)
+        : 'none'
     }
   }
 

@@ -90,7 +90,6 @@ export interface AppSettings {
   defaultDisplayMode: DisplayMode
   editorBackground: EditorBackground
   editorPattern: EditorPattern
-  showLineNumbers: boolean
 }
 
 export interface WindowRecord {

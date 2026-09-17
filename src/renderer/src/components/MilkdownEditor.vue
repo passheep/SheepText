@@ -14,7 +14,6 @@ import type { ToastPayload } from '../../../shared/types'
 const props = defineProps<{
   modelValue: string
   fontSize: number
-  showLineNumbers: boolean
   draftId: string
   readonly?: boolean
 }>()
@@ -36,12 +35,6 @@ type SearchMatch = {
   groups: string[]
 }
 
-type LineMarker = {
-  top: number
-  height: number
-  label: number
-}
-
 const shell = ref<HTMLElement | null>(null)
 const host = ref<HTMLElement | null>(null)
 const findInput = ref<HTMLInputElement | null>(null)
@@ -59,7 +52,6 @@ const preserveCase = ref(false)
 const searchError = ref('')
 const matches = ref<SearchMatch[]>([])
 const activeMatchIndex = ref(-1)
-const lineMarkers = ref<LineMarker[]>([])
 const hasEditorSelection = ref(false)
 
 let crepe: Crepe | null = null
@@ -69,9 +61,6 @@ let selectionScope: { from: number; to: number } | null = null
 let syncingScroll = false
 let localFontSize = props.fontSize
 let pendingExternalMarkdown: string | null = null
-let mutationObserver: MutationObserver | null = null
-let resizeObserver: ResizeObserver | null = null
-let lineUpdateFrame = 0
 let cursorUpdateFrame = 0
 
 const matchLabel = computed(() => {
@@ -161,7 +150,6 @@ onMounted(async () => {
         emit('update:modelValue', markdown)
       }
       updateSearchMatches()
-      scheduleLineNumberUpdate()
       scheduleCursorSafetyUpdate()
     })
     listener.selectionUpdated((ctx, value) => {
@@ -192,24 +180,14 @@ onMounted(async () => {
     shell.value.addEventListener('scroll', onScroll, { passive: true })
     shell.value.addEventListener('keydown', onSearchShortcut, true)
 
-    mutationObserver = new MutationObserver(scheduleLineNumberUpdate)
-    mutationObserver.observe(host.value, { childList: true, subtree: true, attributes: true })
-    resizeObserver = new ResizeObserver(scheduleLineNumberUpdate)
-    resizeObserver.observe(shell.value)
-    resizeObserver.observe(editorView.dom)
-
     emitSelection()
-    scheduleLineNumberUpdate()
   } catch (error) {
     emit('toast', { type: 'error', message: `Milkdown 编辑器初始化失败：${cleanError(error)}` })
   }
 })
 
 onBeforeUnmount(() => {
-  if (lineUpdateFrame) cancelAnimationFrame(lineUpdateFrame)
   if (cursorUpdateFrame) cancelAnimationFrame(cursorUpdateFrame)
-  mutationObserver?.disconnect()
-  resizeObserver?.disconnect()
   if (editorView) {
     editorView.dom.removeEventListener('compositionstart', onCompositionStart)
     editorView.dom.removeEventListener('compositionend', onCompositionEnd)
@@ -231,16 +209,13 @@ watch(() => props.modelValue, (value) => {
   crepe.editor.action(replaceAll(value))
   requestAnimationFrame(() => {
     updateSearchMatches()
-    scheduleLineNumberUpdate()
   })
 })
 
 watch(() => props.fontSize, (size) => {
   localFontSize = size
-  scheduleLineNumberUpdate()
 })
 
-watch(() => props.showLineNumbers, scheduleLineNumberUpdate)
 watch(() => props.readonly, (value) => crepe?.setReadonly(Boolean(value)))
 watch([searchText, matchCase, wholeWord, useRegex, selectionOnly], updateSearchMatches)
 watch(replaceOpen, () => nextTick(() => (replaceOpen.value ? replaceInput.value : findInput.value)?.focus({ preventScroll: true })))
@@ -303,6 +278,7 @@ function scheduleCursorSafetyUpdate(): void {
   if (cursorUpdateFrame) cancelAnimationFrame(cursorUpdateFrame)
   cursorUpdateFrame = requestAnimationFrame(keepCursorAboveBottom)
 }
+// 占位：保持光标安全距离更新入口不变（行号测量已随功能移除）
 
 function keepCursorAboveBottom(): void {
   cursorUpdateFrame = 0
@@ -311,37 +287,6 @@ function keepCursorAboveBottom(): void {
   const bounds = shell.value.getBoundingClientRect()
   const safeBottom = bounds.bottom - localFontSize * 1.78 * 8
   if (cursor.bottom > safeBottom) shell.value.scrollTop += cursor.bottom - safeBottom
-}
-
-function scheduleLineNumberUpdate(): void {
-  if (lineUpdateFrame) cancelAnimationFrame(lineUpdateFrame)
-  lineUpdateFrame = requestAnimationFrame(updateLineNumbers)
-}
-
-function updateLineNumbers(): void {
-  lineUpdateFrame = 0
-  if (!props.showLineNumbers || !editorView || !shell.value) {
-    lineMarkers.value = []
-    return
-  }
-
-  const shellBounds = shell.value.getBoundingClientRect()
-  let label = 1
-  const markers: LineMarker[] = []
-  editorView.state.doc.descendants((node, position) => {
-    if (!node.isTextblock) return true
-    const dom = editorView?.nodeDOM(position)
-    if (!(dom instanceof HTMLElement)) return true
-    const bounds = dom.getBoundingClientRect()
-    if (bounds.height <= 0) return true
-    markers.push({
-      top: bounds.top - shellBounds.top + shell.value!.scrollTop,
-      height: bounds.height,
-      label: label++
-    })
-    return true
-  })
-  lineMarkers.value = markers
 }
 
 function duplicateCurrentBlock(state: EditorState, dispatch?: (transaction: Transaction) => void): boolean {
@@ -383,7 +328,13 @@ function buildSearchExpression(global = true): RegExp | null {
 }
 
 function updateSearchMatches(): void {
-  if (!editorView) return
+  // 搜索框关闭后禁止重建高亮装饰，避免输入或选项变化让旧高亮复现。
+  if (!editorView || !searchOpen.value) {
+    matches.value = []
+    activeMatchIndex.value = -1
+    if (editorView) applySearchDecorations()
+    return
+  }
   searchError.value = ''
   const expression = buildSearchExpression(true)
   if (!expression) {
@@ -569,7 +520,6 @@ function openSearch(): void {
     findInput.value?.focus({ preventScroll: true })
     findInput.value?.select()
     updateSearchMatches()
-    scheduleLineNumberUpdate()
     requestAnimationFrame(() => {
       if (shell.value) shell.value.scrollTop = previousScrollTop
     })
@@ -584,7 +534,10 @@ function closeSearch(): void {
   matches.value = []
   activeMatchIndex.value = -1
   applySearchDecorations()
-  scheduleLineNumberUpdate()
+  // 搜索导航留下的匹配选区收为光标，避免关闭后仍呈现高亮背景。
+  if (editorView && !editorView.state.selection.empty) {
+    editorView.dispatch(editorView.state.tr.setSelection(TextSelection.create(editorView.state.doc, editorView.state.selection.head)))
+  }
   editorView?.focus()
 }
 
@@ -644,16 +597,11 @@ defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRat
     class="milkdown-editor-shell"
     :class="{
       'is-readonly': readonly,
-      'has-line-numbers': showLineNumbers,
       'has-find-widget': searchOpen,
       'has-replace-widget': searchOpen && replaceOpen
     }"
     :style="{ '--milkdown-font-size': `${fontSize}px` }"
   >
-    <div v-if="showLineNumbers" class="milkdown-line-numbers" aria-hidden="true">
-      <span v-for="marker in lineMarkers" :key="`${marker.label}-${marker.top}`" :style="{ top: `${marker.top}px`, height: `${marker.height}px` }">{{ marker.label }}</span>
-    </div>
-
     <div v-if="searchOpen" ref="findWidget" class="milkdown-find-widget sheep-find-widget no-drag" :class="{ 'is-replacing': replaceOpen }" @mousedown.stop>
       <div class="milkdown-find-row sheep-find-row sheep-find-search-row">
         <button class="milkdown-find-toggle sheep-find-expand" :class="{ 'is-expanded': replaceOpen }" type="button" :title="replaceOpen ? '收起替换' : '展开替换'" @click="replaceOpen = !replaceOpen">›</button>

@@ -19,7 +19,6 @@ const props = defineProps<{
   modelValue: string
   displayMode: DisplayMode
   fontSize: number
-  showLineNumbers: boolean
   draftId: string
 }>()
 
@@ -39,7 +38,6 @@ let syncingScroll = false
 let localFontSize = props.fontSize
 const languageCompartment = new Compartment()
 const fontCompartment = new Compartment()
-const gutterCompartment = new Compartment()
 const livePreviewCompartment = new Compartment()
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -630,7 +628,6 @@ function fontExtension(size: number): Extension {
   })
 }
 function languageExtension(mode: DisplayMode): Extension { return mode === 'markdown' ? markdown() : [] }
-function gutterExtension(show: boolean): Extension { return show ? lineNumbers() : [] }
 function previewExtension(): Extension {
   return isLivePreview()
     ? [livePreviewPlugin, liveSelectionToolbarPlugin, livePreviewFormatKeymap, EditorView.editorAttributes.of({ class: 'cm-live-preview cm-milkdown-editor' })]
@@ -969,6 +966,9 @@ class SheepFindPanel implements Panel {
   private close(): void {
     this.recordSearch()
     closeSearchPanel(this.editorView)
+    // 搜索留下的匹配选区收为光标，避免关闭后面板高亮消失但选区背景仍在。
+    const main = this.editorView.state.selection.main
+    if (!main.empty) this.editorView.dispatch({ selection: EditorSelection.cursor(main.head) })
     this.editorView.focus()
   }
 }
@@ -996,7 +996,6 @@ onMounted(() => {
       syntaxHighlighting(markdownHighlightStyle),
       languageCompartment.of(languageExtension(props.displayMode)),
       fontCompartment.of(fontExtension(props.fontSize)),
-      gutterCompartment.of(gutterExtension(props.showLineNumbers)),
       livePreviewCompartment.of(previewExtension()),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
@@ -1065,7 +1064,6 @@ watch(() => props.displayMode, (mode) => {
   view?.dispatch({ effects: [languageCompartment.reconfigure(languageExtension(mode)), livePreviewCompartment.reconfigure(previewExtension())] })
 })
 watch(() => props.fontSize, (size) => { localFontSize = size; view?.dispatch({ effects: fontCompartment.reconfigure(fontExtension(size)) }) })
-watch(() => props.showLineNumbers, (show) => { view?.dispatch({ effects: gutterCompartment.reconfigure(gutterExtension(show)) }) })
 
 async function pasteImage(image: File, editorView: EditorView): Promise<void> {
   try {

@@ -791,3 +791,44 @@
   .milkdown-find-widget .sheep-find-icon-button{width:26px}
   .milkdown-find-widget .sheep-find-count{font-size:8px}
 }
+
+
+/* 2026-09-17 编辑体验需求：标题颜色、块操作柄间距与代码块主题 */
+/* 标题不再固定紫色：统一使用编辑区主文字色，通过字号与字重区分层级 */
+.sheep-milkdown-editor .ProseMirror h1,
+.sheep-milkdown-editor .ProseMirror h2,
+.sheep-milkdown-editor .ProseMirror h3,
+.sheep-milkdown-editor .ProseMirror h4,
+.sheep-milkdown-editor .ProseMirror h5,
+.sheep-milkdown-editor .ProseMirror h6{color:var(--text-primary)!important}
+.cm-live-heading{color:var(--text-primary)!important}
+
+/* 加号与拖动柄靠近正文：收紧浮层偏移与图标间距 */
+.sheep-milkdown-editor .milkdown-block-handle{gap:0;margin-left:-14px}
+.sheep-milkdown-editor .milkdown-block-handle .operation-item{width:24px;height:24px;padding:2px;border-radius:6px}
+.sheep-milkdown-editor .milkdown-block-handle .operation-item svg{width:17px;height:17px}
+@media(max-width:680px){.sheep-milkdown-editor .milkdown-block-handle{margin-left:-10px}}
+
+/* 代码块：背景、留白、边框与文字颜色贴合软件主题 */
+.sheep-milkdown-editor .milkdown-code-block{margin:6px 0;padding:6px 12px 12px;border:1px solid var(--border);border-radius:10px;background:color-mix(in srgb,var(--bg-soft) 72%,transparent);box-shadow:none}
+.sheep-milkdown-editor .milkdown-code-block .cm-editor{background:transparent!important;font-size:calc(var(--milkdown-font-size,15px) * .92)}
+.sheep-milkdown-editor .milkdown-code-block .cm-gutters{background:transparent!important;border-right:none!important;color:var(--text-tertiary)}
+.sheep-milkdown-editor .milkdown-code-block .cm-content{color:var(--text-primary)}
+.sheep-milkdown-editor .milkdown-code-block .cm-cursor,
+.sheep-milkdown-editor .milkdown-code-block .cm-dropCursor{color:var(--text-primary);border-left-color:var(--text-primary)}
+.sheep-milkdown-editor .milkdown-code-block .cm-selectionBackground,
+.sheep-milkdown-editor .milkdown-code-block .cm-focused .cm-selectionBackground,
+.sheep-milkdown-editor .milkdown-code-block .cm-content ::selection{background:var(--selection)!important}
+.sheep-milkdown-editor .milkdown-code-block .cm-activeLine{background:color-mix(in srgb,var(--surface-hover) 62%,transparent)}
+.sheep-milkdown-editor .milkdown-code-block .cm-activeLineGutter{background:transparent;color:var(--text-secondary)}
+.sheep-milkdown-editor .milkdown-code-block .language-button{color:var(--text-tertiary);background:color-mix(in srgb,var(--surface-elevated) 82%,transparent)}
+.sheep-milkdown-editor .milkdown-code-block .language-button:hover{color:var(--text-secondary);background:var(--surface-hover)}
+.sheep-milkdown-editor .milkdown-code-block .tools-button-group>button{color:var(--text-secondary);background:color-mix(in srgb,var(--surface-elevated) 82%,transparent)}
+.sheep-milkdown-editor .milkdown-code-block .tools-button-group>button:hover{color:var(--primary);background:var(--surface-hover)}
+.sheep-milkdown-editor .milkdown-code-block .list-wrapper{background:var(--surface-elevated);box-shadow:var(--shadow-md)}
+.sheep-milkdown-editor .milkdown-code-block .language-list-item{color:var(--text-primary)}
+.sheep-milkdown-editor .milkdown-code-block .search-box{outline-color:color-mix(in srgb,var(--primary) 42%,transparent)}
+.sheep-milkdown-editor .milkdown-code-block .search-box .search-input{color:var(--text-primary)}
+.sheep-milkdown-editor .milkdown-code-block .milkdown-code-block-placeholder{color:var(--text-tertiary)}
+[data-theme='dark'] .sheep-milkdown-editor .milkdown-code-block{background:color-mix(in srgb,#000 26%,var(--bg-soft))}
+@media(prefers-color-scheme:dark){[data-theme='system'] .sheep-milkdown-editor .milkdown-code-block{background:color-mix(in srgb,#000 26%,var(--bg-soft))}}

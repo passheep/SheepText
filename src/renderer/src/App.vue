@@ -260,8 +260,7 @@ function createSettingsSnapshot(source: AppSettings): AppSettings {
     defaultModelConfigId: source.defaultModelConfigId ? String(source.defaultModelConfigId) : null,
     defaultDisplayMode: source.defaultDisplayMode,
     editorBackground: source.editorBackground,
-    editorPattern: source.editorPattern,
-    showLineNumbers: Boolean(source.showLineNumbers)
+    editorPattern: source.editorPattern
   }
 }
 
@@ -826,7 +825,6 @@ function cleanError(error: unknown): string {
               ref="editor"
               :model-value="draft.content"
               :font-size="settings.fontSize"
-              :show-line-numbers="settings.showLineNumbers"
               :draft-id="draft.id"
               @update:model-value="onContentChanged"
               @selection-change="onSelectionChanged"
@@ -842,7 +840,6 @@ function cleanError(error: unknown): string {
               :model-value="draft.content"
               :display-mode="draft.displayMode"
               :font-size="settings.fontSize"
-              :show-line-numbers="settings.showLineNumbers"
               :draft-id="draft.id"
               @update:model-value="onContentChanged"
               @selection-change="onSelectionChanged"

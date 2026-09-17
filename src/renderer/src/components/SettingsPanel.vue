@@ -287,7 +287,6 @@ function cleanError(error: unknown): string {
                       <button v-for="color in themeColorPresets" :key="color.value" type="button" class="theme-swatch" :class="{ active: settingsDraft.themeColor === color.value }" :title="color.label" :style="{ backgroundColor: color.value }" @click="settingsDraft.themeColor = color.value" />
                       <label class="custom-color-swatch" title="自定义主题色"><input v-model="settingsDraft.themeColor" type="color" /><span>自定义</span></label><code>{{ settingsDraft.themeColor }}</code>
                     </div></div>
-                    <label class="setting-row full appearance-toggle"><span><strong>显示行号</strong><small>在 TXT 和 Milkdown Markdown 编辑区左侧显示行号</small></span><ToggleSwitch v-model="settingsDraft.showLineNumbers" /></label>
                   </div>
                 </section>
 

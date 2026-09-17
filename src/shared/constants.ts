@@ -14,8 +14,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultModelConfigId: null,
   defaultDisplayMode: 'txt',
   editorBackground: 'auto',
-  editorPattern: 'grid-large',
-  showLineNumbers: false
+  editorPattern: 'grid-large'
 }
 
 export const SCENE_LABELS: Record<SceneId, string> = {
