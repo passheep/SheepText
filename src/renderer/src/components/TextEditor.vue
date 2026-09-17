@@ -32,6 +32,7 @@ const emit = defineEmits<{
   scrollChange: [ratio: number]
   toast: [payload: ToastPayload]
   pasted: [range: { from: number; to: number }, text: string]
+  pasteInvalidated: []
 }>()
 
 const host = ref<HTMLElement | null>(null)
@@ -1000,7 +1001,10 @@ onMounted(() => {
       fontCompartment.of(fontExtension(props.fontSize)),
       livePreviewCompartment.of(previewExtension()),
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
+        if (update.docChanged) {
+          emit('pasteInvalidated')
+          emit('update:modelValue', update.state.doc.toString())
+        }
         if (update.docChanged || update.selectionSet) emitSelection(update.state)
         if (update.docChanged) requestAnimationFrame(() => keepCursorAboveBottom(update.view))
       }),

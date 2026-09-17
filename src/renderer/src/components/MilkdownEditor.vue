@@ -2,13 +2,13 @@
 import { Crepe, CrepeFeature } from '@milkdown/crepe'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/classic.css'
-import { editorViewCtx, prosePluginsCtx, editorViewOptionsCtx } from '@milkdown/kit/core'
+import { editorViewCtx, prosePluginsCtx } from '@milkdown/kit/core'
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
 import { keymap } from '@milkdown/kit/prose/keymap'
-import { TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
-import { Decoration, DecorationSet, EditorView as ProseMirrorEditorView, type EditorView } from '@milkdown/kit/prose/view'
+import { Plugin, TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
+import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
+import { Fragment, Slice, type Node as ProseMirrorNode } from '@milkdown/kit/prose/model'
 import { callCommand, getMarkdown, replaceAll, replaceRange as replaceMarkdownRange } from '@milkdown/kit/utils'
-import { stripPasteMarkdown } from '../../../shared/paste-format'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ListTree } from '@lucide/vue'
 import type { ToastPayload } from '../../../shared/types'
@@ -29,6 +29,7 @@ const emit = defineEmits<{
   scrollChange: [ratio: number]
   toast: [payload: ToastPayload]
   pasted: [range: { from: number; to: number }, text: string]
+  pasteInvalidated: []
 }>()
 
 type SearchMatch = {
@@ -63,8 +64,9 @@ const outlineOpen = ref(false)
 const outlineItems = ref<OutlineItem[]>([])
 let outlineCloseTimer: ReturnType<typeof setTimeout> | null = null
 
-// 记录最近一次纯文本粘贴在 ProseMirror 文档中的范围，供“清除格式”使用
-let lastPasteRange: { from: number; to: number } | null = null
+// 只记录当前文档的最近一次粘贴；后续正文事务立即使旧范围失效。
+let lastPasteRange: { from: number; to: number; doc: ProseMirrorNode } | null = null
+let pendingPaste: { from: number; to: number } | null = null
 
 let crepe: Crepe | null = null
 let editorView: EditorView | null = null
@@ -151,27 +153,37 @@ onMounted(async () => {
 
   crepe.setReadonly(Boolean(props.readonly))
   crepe.editor.config((ctx) => {
-    ctx.update(prosePluginsCtx, (plugins) => [keymap({ 'Mod-d': duplicateCurrentBlock }), ...plugins])
-    // 拦截纯文本粘贴：记录插入范围并上报，供“粘贴：保留原格式/清除格式”操作区使用
-    ctx.update(editorViewOptionsCtx, (prev) => ({
-      ...prev,
-      handlePaste: (view: ProseMirrorEditorView, event: ClipboardEvent) => {
-        if (props.readonly) return false
-        const text = event.clipboardData?.getData('text/plain')
-        if (text === undefined || text === '') return false
-        const image = Array.from(event.clipboardData?.items ?? []).find((item) => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile()
-        if (image) return false
-        event.preventDefault()
-        const from = view.state.selection.from
-        const transaction = view.state.tr.replaceSelectionWith(view.state.schema.text(text), false)
-        view.dispatch(transaction)
-        const insertedLength = transaction.doc.content.size - view.state.doc.content.size + text.length
-        void insertedLength
-        lastPasteRange = { from, to: from + text.length }
-        emit('pasted', lastPasteRange, text)
-        return true
-      }
-    }))
+    ctx.update(prosePluginsCtx, (plugins) => [
+      keymap({ 'Mod-d': duplicateCurrentBlock }),
+      new Plugin({
+        appendTransaction(transactions, oldState, state) {
+          if (!transactions.some((transaction) => transaction.docChanged)) return null
+          // Milkdown 会在 HTML 粘贴后补写标题 ID；该元数据变化不应取消粘贴提示。
+          if (lastPasteRange?.doc === oldState.doc && withoutHeadingIds(oldState.doc).eq(withoutHeadingIds(state.doc))) {
+            lastPasteRange.doc = state.doc
+            return null
+          }
+          lastPasteRange = null
+          emit('pasteInvalidated')
+          const range = pendingPaste
+          pendingPaste = null
+          if (!range) return null
+          for (const transaction of transactions) {
+            range.from = transaction.mapping.map(range.from, -1)
+            range.to = transaction.mapping.map(range.to, 1)
+          }
+          const snapshot = { ...range, doc: state.doc }
+          lastPasteRange = snapshot
+          // 等待正文更新回调完成后显示提示，避免提示被本次粘贴自身误清除。
+          setTimeout(() => {
+            if (lastPasteRange !== snapshot || editorView?.state.doc !== snapshot.doc) return
+            emit('pasted', range, state.doc.textBetween(range.from, range.to, '\n'))
+          }, 250)
+          return null
+        }
+      }),
+      ...plugins
+    ])
   })
 
   crepe.on((listener) => {
@@ -206,6 +218,7 @@ onMounted(async () => {
     await crepe.create()
     editorView = crepe.editor.action((ctx) => ctx.get(editorViewCtx))
     editorView.setProps({ decorations: () => searchDecorations })
+    editorView.dom.addEventListener('paste', onPasteCapture, true)
     editorView.dom.addEventListener('compositionstart', onCompositionStart)
     editorView.dom.addEventListener('compositionend', onCompositionEnd)
     editorView.dom.addEventListener('click', onEditorClick)
@@ -222,6 +235,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (cursorUpdateFrame) cancelAnimationFrame(cursorUpdateFrame)
   if (editorView) {
+    editorView.dom.removeEventListener('paste', onPasteCapture, true)
     editorView.dom.removeEventListener('compositionstart', onCompositionStart)
     editorView.dom.removeEventListener('compositionend', onCompositionEnd)
     editorView.dom.removeEventListener('click', onEditorClick)
@@ -264,6 +278,26 @@ async function uploadImage(file: File): Promise<string> {
     emit('toast', { type: 'error', message })
     throw new Error(message)
   }
+}
+
+// 比较正文时仅忽略自动生成的标题 ID，其他节点属性、标记及文字仍严格比较。
+function withoutHeadingIds(node: ProseMirrorNode): ProseMirrorNode {
+  if (node.isLeaf) return node
+  const children: ProseMirrorNode[] = []
+  node.forEach((child) => children.push(withoutHeadingIds(child)))
+  const attrs = node.type.name === 'heading' ? { ...node.attrs, id: '' } : node.attrs
+  return node.type.create(attrs, Fragment.fromArray(children), node.marks)
+}
+
+// 捕获阶段只记录选区，不阻断原生粘贴，避免其他插件先消费 HTML 后漏记。
+function onPasteCapture(event: ClipboardEvent): void {
+  pendingPaste = null
+  const data = event.clipboardData
+  if (!editorView || props.readonly || !data || editorView.state.selection.$from.parent.type.spec.code) return
+  if ((event.target as Element)?.closest('.cm-editor') || Array.from(data.items).some((item) => item.kind === 'file')) return
+  const snapshot = { from: editorView.state.selection.from, to: editorView.state.selection.to }
+  pendingPaste = snapshot
+  queueMicrotask(() => { if (pendingPaste === snapshot) pendingPaste = null })
 }
 
 function onCompositionStart(): void {
@@ -665,19 +699,29 @@ function jumpToHeading(item: OutlineItem): void {
   })
 }
 
-// 清除最近粘贴范围的 Markdown 格式标记：在事务内逐文本节点替换，撤销记录完整
+// 清除粘贴范围的 Markdown 格式标记：逐行转成普通段落，避免换行进入文本节点；单次事务可撤销
 function clearPasteFormat(from: number, to: number): boolean {
-  if (!editorView || !crepe) return false
-  const docSize = editorView.state.doc.content.size
-  const safeFrom = Math.max(0, Math.min(from, docSize))
-  const safeTo = Math.max(safeFrom, Math.min(to, docSize))
-  const slice = editorView.state.doc.slice(safeFrom, safeTo)
-  const source = slice.content.textBetween(0, slice.content.size, '\n')
+  if (!editorView || props.readonly || !lastPasteRange) return false
+  if (lastPasteRange.doc !== editorView.state.doc || from !== lastPasteRange.from || to !== lastPasteRange.to) return false
+  // 完整覆盖的首尾文本块连同块类型一起替换，才能真正清除标题格式。
+  const start = editorView.state.doc.resolve(from)
+  const end = editorView.state.doc.resolve(to)
+  const replaceFrom = start.depth && start.parent.isTextblock && start.parentOffset === 0 ? start.before() : from
+  const replaceTo = end.depth && end.parent.isTextblock && end.parentOffset === end.parent.content.size ? end.after() : to
+  const source = editorView.state.doc.textBetween(replaceFrom, replaceTo, '\n', (node) => {
+    if (node.type.name.includes('image')) return String(node.attrs.alt || node.attrs.src || '')
+    if (node.type.name === 'hardbreak' || node.type.name === 'hard_break') return '\n'
+    return ''
+  })
   if (!source.trim()) return false
-  const stripped = stripPasteMarkdown(source)
-  if (stripped === source) return false
-  const transaction = editorView.state.tr.replaceWith(safeFrom, safeTo, editorView.state.schema.text(stripped))
-  editorView.dispatch(transaction)
+  const schema = editorView.state.schema
+  const paragraphs = source.split('\n').map((line) =>
+    schema.nodes.paragraph.create(null, line ? schema.text(line) : undefined)
+  )
+  // 保持粘贴边界的开放深度，不把同段前后的未粘贴文字一起转成普通段落。
+  const original = editorView.state.doc.slice(replaceFrom, replaceTo)
+  const slice = new Slice(Fragment.fromArray(paragraphs), Math.min(original.openStart, 1), Math.min(original.openEnd, 1))
+  editorView.dispatch(editorView.state.tr.replace(replaceFrom, replaceTo, slice))
   lastPasteRange = null
   return true
 }

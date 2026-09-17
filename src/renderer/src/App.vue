@@ -206,7 +206,7 @@ const interactionState = computed<WindowInteractionState>(() => ({
   interacting: editorFocused.value,
   composing: isComposing.value,
   drawerOpen: historyOpen.value,
-  menuOpen: newMenuOpen.value || sceneMenuOpen.value || openSelectCount.value > 0 || settingsOpen.value,
+  menuOpen: newMenuOpen.value || sceneMenuOpen.value || openSelectCount.value > 0 || settingsOpen.value || Boolean(pasteNotice.value),
   aiPreviewOpen: ai.open
 }))
 
@@ -227,6 +227,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  hidePasteNotice()
   if (saveTimer) clearTimeout(saveTimer)
   if (toastTimer) clearTimeout(toastTimer)
   if (settingsSaveTimer) clearTimeout(settingsSaveTimer)
@@ -235,6 +236,7 @@ onBeforeUnmount(() => {
   unsubscribers.forEach((unsubscribe) => unsubscribe())
 })
 
+watch(() => [draft.value?.id, draft.value?.displayMode], hidePasteNotice)
 watch(interactionState, (state) => window.sheepText.setInteractionState(windowId, state), { deep: true })
 watch(historyOpen, (open) => {
   if (open) void loadHistory(true)
@@ -329,6 +331,7 @@ function createSettingsSnapshot(source: AppSettings): AppSettings {
 
 function onContentChanged(content: string): void {
   if (!draft.value || draft.value.content === content) return
+  hidePasteNotice()
   draft.value.content = content
   draft.value.version += 1
   scheduleSave()
@@ -895,6 +898,7 @@ function cleanError(error: unknown): string {
               @composition-change="isComposing = $event"
               @font-size-change="onFontSizeChange"
               @pasted="onPasted"
+              @paste-invalidated="hidePasteNotice"
               @toast="showToast"
             />
             <TextEditor
@@ -911,6 +915,7 @@ function cleanError(error: unknown): string {
               @composition-change="isComposing = $event"
               @font-size-change="onFontSizeChange"
               @pasted="onPasted"
+              @paste-invalidated="hidePasteNotice"
               @toast="showToast"
             />
             <div v-if="!draft.content && draft.displayMode === 'txt'" class="starter-hints no-drag">
@@ -922,7 +927,7 @@ function cleanError(error: unknown): string {
         </div>
 
         <Transition name="popover">
-          <div v-if="pasteNotice" class="paste-notice no-drag" @mouseenter="clearPasteNoticeTimer" @mouseleave="startPasteNoticeTimer">
+          <div v-if="pasteNotice" class="paste-notice no-drag" @mouseenter="clearPasteNoticeTimer" @mouseleave="startPasteNoticeTimer" @focusin="clearPasteNoticeTimer" @focusout="startPasteNoticeTimer" @keydown.esc="hidePasteNotice">
             <ClipboardPaste :size="15" />
             <span class="paste-notice-label">粘贴：{{ pasteNotice.cleared ? '已清除格式' : '保留原格式' }}</span>
             <button v-if="!pasteNotice.cleared" type="button" @click="clearPastedFormat">清除格式</button>
