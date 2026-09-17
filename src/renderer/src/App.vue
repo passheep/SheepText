@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {
-  ChevronDown, Code2, Copy, FileDown, FilePlus2, FolderOpen,
+  ChevronDown, ClipboardPaste, Code2, Copy, FileDown, FilePlus2, FolderOpen,
   History, Image, Maximize2, MessageSquareText, Minus, PanelTop, Pin, Plus,
   Settings as SettingsIcon, Sparkles, Text, WandSparkles, X
 } from '@lucide/vue'
@@ -27,6 +27,69 @@ type EditorExpose = {
   redoOnce: () => boolean
   setScrollRatio: (ratio: number) => void
   openSearch: () => void
+  clearPasteFormat: (from: number, to: number) => boolean
+}
+
+// 粘贴格式临时操作区状态：记录本次粘贴范围，超时或新编辑后失效
+type PasteNotice = {
+  draftId: string
+  displayMode: 'txt' | 'markdown'
+  range: { from: number; to: number }
+  cleared: boolean
+}
+const pasteNotice = ref<PasteNotice | null>(null)
+let pasteNoticeTimer: ReturnType<typeof setTimeout> | null = null
+const PASTE_NOTICE_MS = 5000
+
+function clearPasteNoticeTimer(): void {
+  if (pasteNoticeTimer) { clearTimeout(pasteNoticeTimer); pasteNoticeTimer = null }
+}
+
+function hidePasteNotice(): void {
+  clearPasteNoticeTimer()
+  pasteNotice.value = null
+}
+
+function onPasted(range: { from: number; to: number }, text: string): void {
+  if (!draft.value || !text.trim() || range.to <= range.from) {
+    hidePasteNotice()
+    return
+  }
+  pasteNotice.value = {
+    draftId: draft.value.id,
+    displayMode: draft.value.displayMode,
+    range,
+    cleared: false
+  }
+  clearPasteNoticeTimer()
+  pasteNoticeTimer = setTimeout(hidePasteNotice, PASTE_NOTICE_MS)
+}
+
+// 清除本次粘贴内容的 Markdown 格式标记（方案 B：转为可读正文）
+function clearPastedFormat(): void {
+  const notice = pasteNotice.value
+  if (!notice || !draft.value || notice.cleared) return
+  if (notice.draftId !== draft.value.id || notice.displayMode !== draft.value.displayMode) {
+    hidePasteNotice()
+    return
+  }
+  if (editor.value?.clearPasteFormat(notice.range.from, notice.range.to)) {
+    pasteNotice.value = { ...notice, cleared: true }
+    clearPasteNoticeTimer()
+    pasteNoticeTimer = setTimeout(hidePasteNotice, PASTE_NOTICE_MS)
+  } else {
+    hidePasteNotice()
+  }
+}
+
+function keepPastedFormat(): void {
+  hidePasteNotice()
+}
+
+// 鼠标悬停后离开，重新计时自动隐藏
+function startPasteNoticeTimer(): void {
+  clearPasteNoticeTimer()
+  pasteNoticeTimer = setTimeout(hidePasteNotice, PASTE_NOTICE_MS)
 }
 
 type RequestSnapshot = {
@@ -831,6 +894,7 @@ function cleanError(error: unknown): string {
               @focus-change="editorFocused = $event"
               @composition-change="isComposing = $event"
               @font-size-change="onFontSizeChange"
+              @pasted="onPasted"
               @toast="showToast"
             />
             <TextEditor
@@ -846,6 +910,7 @@ function cleanError(error: unknown): string {
               @focus-change="editorFocused = $event"
               @composition-change="isComposing = $event"
               @font-size-change="onFontSizeChange"
+              @pasted="onPasted"
               @toast="showToast"
             />
             <div v-if="!draft.content && draft.displayMode === 'txt'" class="starter-hints no-drag">
@@ -855,6 +920,15 @@ function cleanError(error: unknown): string {
             </div>
           </section>
         </div>
+
+        <Transition name="popover">
+          <div v-if="pasteNotice" class="paste-notice no-drag" @mouseenter="clearPasteNoticeTimer" @mouseleave="startPasteNoticeTimer">
+            <ClipboardPaste :size="15" />
+            <span class="paste-notice-label">粘贴：{{ pasteNotice.cleared ? '已清除格式' : '保留原格式' }}</span>
+            <button v-if="!pasteNotice.cleared" type="button" @click="clearPastedFormat">清除格式</button>
+            <button type="button" class="paste-notice-close" title="关闭" @click="keepPastedFormat"><X :size="13" /></button>
+          </div>
+        </Transition>
 
         <HistoryDrawer
           :open="historyOpen"

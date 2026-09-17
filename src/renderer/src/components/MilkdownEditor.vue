@@ -2,12 +2,13 @@
 import { Crepe, CrepeFeature } from '@milkdown/crepe'
 import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/classic.css'
-import { editorViewCtx, prosePluginsCtx } from '@milkdown/kit/core'
+import { editorViewCtx, prosePluginsCtx, editorViewOptionsCtx } from '@milkdown/kit/core'
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
-import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
+import { Decoration, DecorationSet, EditorView as ProseMirrorEditorView, type EditorView } from '@milkdown/kit/prose/view'
 import { callCommand, getMarkdown, replaceAll, replaceRange as replaceMarkdownRange } from '@milkdown/kit/utils'
+import { stripPasteMarkdown } from '../../../shared/paste-format'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ListTree } from '@lucide/vue'
 import type { ToastPayload } from '../../../shared/types'
@@ -27,6 +28,7 @@ const emit = defineEmits<{
   fontSizeChange: [size: number]
   scrollChange: [ratio: number]
   toast: [payload: ToastPayload]
+  pasted: [range: { from: number; to: number }, text: string]
 }>()
 
 type SearchMatch = {
@@ -60,6 +62,9 @@ type OutlineItem = { level: number; text: string; pos: number }
 const outlineOpen = ref(false)
 const outlineItems = ref<OutlineItem[]>([])
 let outlineCloseTimer: ReturnType<typeof setTimeout> | null = null
+
+// 记录最近一次纯文本粘贴在 ProseMirror 文档中的范围，供“清除格式”使用
+let lastPasteRange: { from: number; to: number } | null = null
 
 let crepe: Crepe | null = null
 let editorView: EditorView | null = null
@@ -147,6 +152,26 @@ onMounted(async () => {
   crepe.setReadonly(Boolean(props.readonly))
   crepe.editor.config((ctx) => {
     ctx.update(prosePluginsCtx, (plugins) => [keymap({ 'Mod-d': duplicateCurrentBlock }), ...plugins])
+    // 拦截纯文本粘贴：记录插入范围并上报，供“粘贴：保留原格式/清除格式”操作区使用
+    ctx.update(editorViewOptionsCtx, (prev) => ({
+      ...prev,
+      handlePaste: (view: ProseMirrorEditorView, event: ClipboardEvent) => {
+        if (props.readonly) return false
+        const text = event.clipboardData?.getData('text/plain')
+        if (text === undefined || text === '') return false
+        const image = Array.from(event.clipboardData?.items ?? []).find((item) => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile()
+        if (image) return false
+        event.preventDefault()
+        const from = view.state.selection.from
+        const transaction = view.state.tr.replaceSelectionWith(view.state.schema.text(text), false)
+        view.dispatch(transaction)
+        const insertedLength = transaction.doc.content.size - view.state.doc.content.size + text.length
+        void insertedLength
+        lastPasteRange = { from, to: from + text.length }
+        emit('pasted', lastPasteRange, text)
+        return true
+      }
+    }))
   })
 
   crepe.on((listener) => {
@@ -640,11 +665,28 @@ function jumpToHeading(item: OutlineItem): void {
   })
 }
 
+// 清除最近粘贴范围的 Markdown 格式标记：在事务内逐文本节点替换，撤销记录完整
+function clearPasteFormat(from: number, to: number): boolean {
+  if (!editorView || !crepe) return false
+  const docSize = editorView.state.doc.content.size
+  const safeFrom = Math.max(0, Math.min(from, docSize))
+  const safeTo = Math.max(safeFrom, Math.min(to, docSize))
+  const slice = editorView.state.doc.slice(safeFrom, safeTo)
+  const source = slice.content.textBetween(0, slice.content.size, '\n')
+  if (!source.trim()) return false
+  const stripped = stripPasteMarkdown(source)
+  if (stripped === source) return false
+  const transaction = editorView.state.tr.replaceWith(safeFrom, safeTo, editorView.state.schema.text(stripped))
+  editorView.dispatch(transaction)
+  lastPasteRange = null
+  return true
+}
+
 onBeforeUnmount(() => {
   if (outlineCloseTimer) clearTimeout(outlineCloseTimer)
 })
 
-defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio })
+defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio, clearPasteFormat })
 </script>
 
 <template>

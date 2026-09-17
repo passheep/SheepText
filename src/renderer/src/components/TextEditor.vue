@@ -14,6 +14,7 @@ import {
 } from '@codemirror/view'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { DisplayMode, ToastPayload } from '../../../shared/types'
+import { stripPasteMarkdown } from '../../../shared/paste-format'
 
 const props = defineProps<{
   modelValue: string
@@ -30,6 +31,7 @@ const emit = defineEmits<{
   fontSizeChange: [size: number]
   scrollChange: [ratio: number]
   toast: [payload: ToastPayload]
+  pasted: [range: { from: number; to: number }, text: string]
 }>()
 
 const host = ref<HTMLElement | null>(null)
@@ -1041,7 +1043,10 @@ onMounted(() => {
           const text = event.clipboardData?.getData('text/plain')
           if (text === undefined) return false
           event.preventDefault()
+          const range = editorView.state.selection.main
           editorView.dispatch(editorView.state.replaceSelection(text))
+          // 上报本次粘贴范围与文本，供底部“保留原格式/清除格式”操作区使用
+          emit('pasted', { from: range.from, to: range.from + text.length }, text)
           return true
         },
         focus() { emit('focusChange', true); return false },
@@ -1112,7 +1117,22 @@ function replaceRange(from: number, to: number, text: string): void {
 function undoOnce(): boolean { return view ? undo(view) : false }
 function redoOnce(): boolean { return view ? redo(view) : false }
 
-defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio })
+// 清除指定范围内的 Markdown 格式标记（方案 B），作为可撤销的完整事务返回是否生效
+function clearPasteFormat(from: number, to: number): boolean {
+  if (!view) return false
+  const docLength = view.state.doc.length
+  const safeFrom = Math.max(0, Math.min(from, docLength))
+  const safeTo = Math.max(safeFrom, Math.min(to, docLength))
+  const source = view.state.sliceDoc(safeFrom, safeTo)
+  if (!source.trim()) return false
+  const stripped = stripPasteMarkdown(source)
+  if (stripped === source) return false
+  view.dispatch({ changes: { from: safeFrom, to: safeTo, insert: stripped } })
+  view.focus()
+  return true
+}
+
+defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio, clearPasteFormat })
 </script>
 
 <template>

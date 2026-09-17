@@ -845,3 +845,14 @@
 .milkdown-outline-level{flex:0 0 auto;padding:1px 4px;border-radius:5px;color:var(--text-tertiary);background:var(--bg-soft);font-size:9px;font-weight:750}
 .milkdown-outline-item:hover .milkdown-outline-level{color:var(--primary);background:var(--primary-soft)}
 .milkdown-outline-text{overflow:hidden;min-width:0;flex:1;text-overflow:ellipsis;white-space:nowrap}
+
+
+/* 2026-09-17 粘贴格式临时操作区 */
+.paste-notice{position:absolute;bottom:14px;left:50%;z-index:90;display:flex;align-items:center;gap:8px;padding:6px 8px 6px 12px;border:1px solid var(--border-strong);border-radius:12px;color:var(--text-secondary);background:color-mix(in srgb,var(--surface-elevated) 96%,transparent);box-shadow:var(--shadow-md);backdrop-filter:blur(20px);transform:translateX(-50%);font-size:11px;white-space:nowrap;user-select:none}
+.paste-notice>svg{color:var(--primary)}
+.paste-notice-label{color:var(--text-secondary);font-weight:650}
+.paste-notice button{display:inline-flex;align-items:center;justify-content:center;height:26px;padding:0 10px;border:1px solid var(--border);border-radius:8px;color:var(--text-primary);background:var(--surface);cursor:pointer;font-size:11px;font-weight:650;transition:.13s ease}
+.paste-notice button:hover{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 30%,var(--border));background:var(--primary-soft)}
+.paste-notice .paste-notice-close{width:26px;padding:0;color:var(--text-tertiary);background:transparent;border-color:transparent}
+.paste-notice .paste-notice-close:hover{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 24%,transparent);background:var(--danger-soft)}
+@media(max-width:620px){.paste-notice{bottom:10px;max-width:calc(100% - 20px)}}
