@@ -1,8 +1,13 @@
 <script setup lang="ts">
-import { AlertTriangle, Clock3, LoaderCircle, Search, Sparkles, Trash2, X } from '@lucide/vue'
+import { AlertTriangle, Clock3, File, Folder, FolderOpen, LoaderCircle, Search, Sparkles, Trash2, X } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import type { DraftSummary } from '../../../shared/types'
 import BaseButton from './BaseButton.vue'
+
+// 在资源管理器中显示文件所在位置（F18）
+function openContainingFolder(filePath: string): void {
+  void window.sheepText.showItemInFolder(filePath)
+}
 import IconButton from './IconButton.vue'
 
 const props = defineProps<{
@@ -131,13 +136,18 @@ function fullTime(timestamp: number): string {
                   <span v-if="item.isCurrent" class="mini-badge accent">当前</span>
                   <span v-else-if="item.openWindowId" class="mini-badge">已打开</span>
                   <span class="mini-badge">{{ item.displayMode === 'markdown' ? 'MD' : 'TXT' }}</span>
+                  <span v-if="item.filePath" class="mini-badge file-badge" title="本地文件文稿"><Folder :size="11" />文件</span>
                 </span>
                 <span class="history-summary">{{ item.summary || '空白文稿' }}</span>
                 <span class="history-delete-slot" aria-hidden="true" />
               </span>
+              <span v-if="item.filePath" class="history-file-path" :title="item.filePath"><File :size="12" /><span>{{ item.filePath }}</span></span>
               <span class="history-item-bottom">
                 <span class="history-meta" :title="fullTime(item.updatedAt)"><Clock3 :size="12" />{{ formatTime(item.updatedAt) }}</span>
-                <span class="history-count">{{ item.characterCount.toLocaleString('zh-CN') }} 字</span>
+                <span class="history-item-bottom-right">
+                  <span class="history-count">{{ item.characterCount.toLocaleString('zh-CN') }} 字</span>
+                  <button v-if="item.filePath" type="button" class="history-open-folder" :title="item.filePath" @click.stop="openContainingFolder(item.filePath)"><FolderOpen :size="13" />打开文件夹</button>
+                </span>
               </span>
             </button>
             <IconButton class="history-delete-button" title="删除文稿" size="sm" danger @click.stop="requestDelete(item)"><Trash2 :size="15" /></IconButton>
@@ -163,7 +173,7 @@ function fullTime(timestamp: number): string {
             <span class="delete-warning-icon"><AlertTriangle :size="22" /></span>
             <div>
               <h3>确定删除这篇文稿？</h3>
-              <p>删除后无法恢复。{{ pendingDelete.isCurrent ? '当前窗口会自动切换到新的空白文稿。' : '' }}</p>
+              <p>删除后无法恢复。{{ pendingDelete.isCurrent ? '当前窗口会自动切换到新的空白文稿。' : '' }}<strong v-if="pendingDelete.filePath" class="delete-file-warning">本地文件也将一并删除：{{ pendingDelete.filePath }}</strong></p>
             </div>
             <div class="history-delete-actions">
               <BaseButton variant="ghost" size="sm" @click="cancelDelete"><template #icon><X :size="15" /></template>取消</BaseButton>

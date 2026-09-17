@@ -83,6 +83,15 @@ export class WindowManager {
     await this.createWindow(record, !show)
   }
 
+  /** 为本地文件创建独立窗口（需求 F15：每个文件一个新窗口） */
+  async createWindowForDraft(draftId: string, show = true): Promise<string> {
+    const record = this.store.createWindowRecord(draftId, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
+    const browserWindow = await this.createWindow(record, !show)
+    return browserWindow.webContents.getURL().includes('windowId=')
+      ? new URL(browserWindow.webContents.getURL()).searchParams.get('windowId') ?? record.id
+      : record.id
+  }
+
   async createWindow(record: WindowRecord, startHidden = false): Promise<BrowserWindow> {
     const preferredWidth = Math.max(record.width, WINDOW_MIN_WIDTH)
     const preferredHeight = Math.max(record.height, WINDOW_MIN_HEIGHT)

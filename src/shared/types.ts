@@ -19,6 +19,8 @@ export interface Draft {
   scene: SceneId
   modelConfigId: string | null
   displayMode: DisplayMode
+  /** 本地文件路径；null 表示普通文稿，非空表示文件文稿（内容以磁盘文件为准并双写数据库） */
+  filePath: string | null
 }
 
 export interface DraftSaveInput {
@@ -39,6 +41,7 @@ export interface DraftSummary {
   displayMode: DisplayMode
   isCurrent: boolean
   openWindowId: string | null
+  filePath: string | null
 }
 
 export interface HistoryQuery {
@@ -203,6 +206,12 @@ export interface PastedImageResult {
 export interface SheepTextApi {
   bootstrap: (windowId: string) => Promise<WindowBootstrap>
   saveDraft: (input: DraftSaveInput) => Promise<Draft>
+  /** 打开本地文件为文件文稿（新窗口）；reused 表示该文件已在窗口中打开；convertedFromGbk 表示非 UTF-8 已转换 */
+  openLocalFile: (filePath: string) => Promise<{ opened: boolean; windowId: string; draft: Draft; snapshot?: { mtimeMs: number; size: number } | null; reused?: boolean; convertedFromGbk?: boolean }>
+  /** 检查文件文稿是否被外部修改（窗口重新聚焦时调用） */
+  checkExternalChange: (draftId: string) => Promise<{ changed: boolean; missing?: boolean; path?: string }>
+  /** 外部修改处理：reload=重新读磁盘，keep=内存版本覆盖磁盘 */
+  resolveExternalChange: (draftId: string, action: 'reload' | 'keep') => Promise<{ content: string; convertedFromGbk?: boolean; missing?: boolean }>
   createDraft: (windowId: string) => Promise<Draft>
   openDraft: (windowId: string, draftId: string) => Promise<OpenDraftResult>
   searchHistory: (query: HistoryQuery) => Promise<HistoryPage>
@@ -228,6 +237,8 @@ export interface SheepTextApi {
   setInteractionState: (windowId: string, state: WindowInteractionState) => void
   windowAction: (windowId: string, action: WindowAction) => Promise<void>
   openExternal: (url: string) => Promise<void>
+  /** 在资源管理器中显示该文件（仅限本地磁盘路径） */
+  showItemInFolder: (filePath: string) => Promise<void>
   onModelsChanged: (callback: (models: ModelConfigPublic[]) => void) => () => void
   onSettingsChanged: (callback: (settings: AppSettings) => void) => () => void
   onDockStateChanged: (callback: (state: { isDocked: boolean; isCollapsed: boolean; dockSide: DockSide }) => void) => () => void

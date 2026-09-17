@@ -857,3 +857,23 @@
 .paste-notice .paste-notice-close{width:26px;padding:0;color:var(--text-tertiary);background:transparent;border-color:transparent}
 .paste-notice .paste-notice-close:hover{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 24%,transparent);background:var(--danger-soft)}
 @media(max-width:620px){.paste-notice{bottom:10px;max-width:calc(100% - 20px)}}
+
+
+/* 2026-09-17 外部修改检测对话框 */
+.external-conflict-overlay{position:fixed;inset:0;z-index:400;display:grid;place-items:center;background:color-mix(in srgb,#000 32%,transparent);backdrop-filter:blur(2px)}
+.external-conflict-dialog{width:min(420px,calc(100% - 40px));padding:20px;border:1px solid var(--border-strong);border-radius:16px;background:var(--surface-elevated);box-shadow:var(--shadow-md)}
+.external-conflict-dialog h3{margin:0 0 10px;color:var(--text-primary);font-size:15px}
+.external-conflict-path{margin:0 0 10px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;color:var(--text-tertiary);background:var(--bg-soft);font-size:11px;word-break:break-all}
+.external-conflict-dialog p:not(.external-conflict-path){margin:0 0 14px;color:var(--text-secondary);font-size:12px;line-height:1.6}
+.external-conflict-actions{display:flex;justify-content:flex-end;gap:8px}
+
+
+/* 2026-09-17 文稿历史文件文稿标识 */
+.mini-badge.file-badge{display:inline-flex;align-items:center;gap:3px;color:var(--primary)}
+.history-file-path{display:flex;align-items:center;gap:5px;margin-top:3px;max-width:100%;overflow:hidden;color:var(--text-tertiary);font-size:10px}
+.history-file-path svg{flex:0 0 auto}
+.history-file-path span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.history-item-bottom-right{display:inline-flex;align-items:center;gap:7px}
+.history-open-folder{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid var(--border);border-radius:6px;color:var(--text-tertiary);background:transparent;cursor:pointer;font-size:10px;transition:.13s ease}
+.history-open-folder:hover{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 28%,var(--border));background:var(--primary-soft)}
+.delete-file-warning{display:block;margin-top:5px;color:var(--danger);font-weight:650;word-break:break-all}

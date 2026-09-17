@@ -1,7 +1,7 @@
 import { app, clipboard, dialog, ipcMain, safeStorage, shell, type IpcMainInvokeEvent } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { copyFile, cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, extname, join, parse } from 'node:path'
+import { basename, dirname, extname, join, parse, resolve } from 'node:path'
 import type {
   AiRequest,
   AppSettings,
@@ -14,6 +14,7 @@ import type {
 import { AiService } from './ai-service'
 import { DataStore } from './data-store'
 import { WindowManager } from './window-manager'
+import { displayModeForFile, readTextFile, snapshotFile, writeTextFileUtf8 } from './file-drafts'
 
 export function registerIpc(store: DataStore, aiService: AiService, windows: WindowManager): void {
   const assertWindow = (event: IpcMainInvokeEvent, windowId: string): void => {
@@ -38,11 +39,20 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     }
   })
 
-  ipcMain.handle('draft:save', (event, windowId: string, input: DraftSaveInput) => {
+  ipcMain.handle('draft:save', async (event, windowId: string, input: DraftSaveInput) => {
     assertWindow(event, windowId)
     const record = store.getWindow(windowId)
     if (!record || record.draftId !== input.id) throw new Error('当前窗口未打开该文稿')
-    return store.saveDraft(input)
+    // F16/F17：文件文稿同步写盘；磁盘失败时报错并保留内存内容由用户处理
+    const current = store.getDraft(input.id)
+    if (current?.filePath) {
+      const before = await snapshotFile(current.filePath)
+      if (!before) throw new Error('文件已不存在或无法访问，请先另存到其他位置')
+      await writeTextFileUtf8(current.filePath, input.content)
+    }
+    const saved = store.saveDraft(input)
+    if (current?.filePath) fileSnapshots.set(input.id, (await snapshotFile(current.filePath))!)
+    return saved
   })
 
   ipcMain.handle('draft:create', (event, windowId: string) => {
@@ -67,7 +77,7 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     return store.searchHistory(query)
   })
 
-  ipcMain.handle('draft:delete', (event, windowId: string, draftId: string) => {
+  ipcMain.handle('draft:delete', async (event, windowId: string, draftId: string) => {
     assertWindow(event, windowId)
     const windowRecord = store.getWindow(windowId)
     if (!windowRecord) throw new Error('当前窗口状态不存在')
@@ -79,7 +89,16 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
       replacementDraft = store.createDraft()
       windows.switchDraft(windowId, replacementDraft.id)
     }
+    // F18：文件文稿删除时把本地文件移入回收站（不永久删除），先取记录再删库
+    const target = store.getDraft(draftId)
     store.deleteDraft(draftId)
+    if (target?.filePath) {
+      try {
+        await shell.trashItem(target.filePath)
+      } catch {
+        // 文件可能已被外部删除；数据库记录已清理，不影响流程
+      }
+    }
     return { deletedId: draftId, replacementDraft }
   })
 
@@ -154,11 +173,77 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     })
     if (result.canceled || !result.filePaths[0]) return { canceled: true }
     const filePath = result.filePaths[0]
-    const displayMode = filePath.toLowerCase().endsWith('.md') ? 'markdown' : 'txt'
-    const content = await readFile(filePath, 'utf8')
+    const displayMode = displayModeForFile(filePath)
+    const { content } = await readTextFile(filePath)
     const draft = store.createDraft(content, displayMode)
     windows.switchDraft(windowId, draft.id)
     return { canceled: false, filePath, draft }
+  })
+
+  // —— F15/F16：打开本地文件为文件文稿，每个文件独立新窗口 ——
+  ipcMain.handle('file:open', async (_event, filePath: string) => {
+    const absolute = resolve(filePath)
+    if (!/\.(txt|md|markdown)$/i.test(absolute)) throw new Error('仅支持打开 TXT 或 Markdown 文件')
+    // 同一文件已打开时直接激活既有窗口，避免重复打开
+    const existing = store.findFileDraft(absolute)
+    if (existing) {
+      const record = store.getOpenWindowForDraft(existing.id)
+      if (record) {
+        windows.activateWindow(record.id)
+        return { opened: true, windowId: record.id, draft: existing, reused: true }
+      }
+    }
+    const { content, convertedFromGbk } = await readTextFile(absolute)
+    const snapshot = await snapshotFile(absolute)
+    const draft = existing
+      ? (store.saveDraft({ id: existing.id, content, version: existing.version, scene: existing.scene, modelConfigId: existing.modelConfigId, displayMode: existing.displayMode }), store.getDraft(existing.id)!)
+      : store.createFileDraft(absolute, content, displayModeForFile(absolute))
+    const newWindowId = await windows.createWindowForDraft(draft.id)
+    if (snapshot) fileSnapshots.set(draft.id, snapshot)
+    return { opened: true, windowId: newWindowId, draft, snapshot, convertedFromGbk }
+  })
+
+  // —— F17：外部修改检测 —— 快照在打开/保存时由主进程记录，切回窗口时比对
+  const fileSnapshots = new Map<string, { mtimeMs: number; size: number }>()
+
+  ipcMain.handle('file:check-external', async (event, windowId: string, draftId: string) => {
+    assertWindow(event, windowId)
+    const record = store.getWindow(windowId)
+    if (!record || record.draftId !== draftId) throw new Error('当前窗口未打开该文稿')
+    const draft = store.getDraft(draftId)
+    if (!draft?.filePath) return { changed: false }
+    const current = await snapshotFile(draft.filePath)
+    if (!current) return { changed: true, missing: true }
+    const recorded = fileSnapshots.get(draftId)
+    // 尚无记录时以当前状态为基准
+    if (!recorded) {
+      fileSnapshots.set(draftId, current)
+      return { changed: false }
+    }
+    const changed = current.mtimeMs !== recorded.mtimeMs || current.size !== recorded.size
+    return { changed, missing: false, path: draft.filePath }
+  })
+
+  // 外部修改确认后：重新加载（读磁盘并更新 DB）或保留内存版本覆盖磁盘
+  ipcMain.handle('file:resolve-external', async (event, windowId: string, draftId: string, action: 'reload' | 'keep') => {
+    assertWindow(event, windowId)
+    const draft = store.getDraft(draftId)
+    if (!draft?.filePath) throw new Error('该文稿不是文件文稿')
+    if (action === 'reload') {
+      const { content, convertedFromGbk } = await readTextFile(draft.filePath)
+      const saved = store.saveDraft({ id: draft.id, content, version: draft.version, scene: draft.scene, modelConfigId: draft.modelConfigId, displayMode: draft.displayMode })
+      fileSnapshots.set(draftId, (await snapshotFile(draft.filePath))!)
+      return { content: saved.content, convertedFromGbk, missing: false }
+    }
+    await writeTextFileUtf8(draft.filePath, draft.content)
+    fileSnapshots.set(draftId, (await snapshotFile(draft.filePath))!)
+    return { content: draft.content, missing: false }
+  })
+
+  // 打开与保存后登记快照基线
+  ipcMain.handle('file:register-snapshot', (event, windowId: string, draftId: string, snapshot: { mtimeMs: number; size: number }) => {
+    assertWindow(event, windowId)
+    fileSnapshots.set(draftId, snapshot)
   })
 
   ipcMain.handle('draft:paste-image', async (event, windowId: string, draftId: string, input: PastedImageInput) => {
@@ -286,6 +371,13 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
       default:
         throw new Error('不支持的窗口操作')
     }
+  })
+
+  // F18：在资源管理器中显示文件所在位置
+  ipcMain.handle('shell:show-item-in-folder', (event, windowId: string, filePath: string) => {
+    assertWindow(event, windowId)
+    if (!/^[a-zA-Z]:[\\/]/.test(filePath)) throw new Error('路径不合法')
+    shell.showItemInFolder(filePath)
   })
 
   ipcMain.handle('shell:open-external', async (event, windowId: string, url: string) => {

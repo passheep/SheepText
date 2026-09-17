@@ -21,6 +21,7 @@ type DraftRow = {
   scene: SceneId
   model_config_id: string | null
   display_mode: DisplayMode
+  file_path?: string | null
 }
 
 type ModelRow = {
@@ -128,6 +129,11 @@ export class DataStore {
       CREATE INDEX IF NOT EXISTS idx_windows_draft_open ON window_states(draft_id, is_open);
       CREATE INDEX IF NOT EXISTS idx_windows_active ON window_states(is_open, last_active_at DESC);
     `)
+    // F14 迁移：旧库补 file_path 列（null=普通文稿，非空=本地文件文稿）
+    const draftColumns = this.db.prepare('PRAGMA table_info(drafts)').all() as Array<{ name: string }>
+    if (!draftColumns.some((column) => column.name === 'file_path')) {
+      this.db.exec('ALTER TABLE drafts ADD COLUMN file_path TEXT')
+    }
     const row = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get('app') as { value: string } | undefined
     if (!row) this.db.prepare('INSERT INTO app_settings(key, value) VALUES (?, ?)').run('app', JSON.stringify(DEFAULT_SETTINGS))
   }
@@ -248,13 +254,44 @@ export class DataStore {
     return target
   }
 
+  /** 按文件路径查找已有文稿（同一文件重复打开时复用记录） */
+  findFileDraft(filePath: string): Draft | null {
+    const row = this.db.prepare('SELECT * FROM drafts WHERE file_path = ? ORDER BY updated_at DESC LIMIT 1').get(filePath) as DraftRow | undefined
+    return row ? this.mapDraft(row) : null
+  }
+
+  /** 从本地文件创建文件文稿：内容双写数据库，filePath 记录磁盘位置 */
+  createFileDraft(filePath: string, content: string, displayMode: DisplayMode): Draft {
+    const settings = this.getSettings()
+    const now = Date.now()
+    const draft: Draft = {
+      id: randomUUID(), content, createdAt: now, updatedAt: now, version: 1,
+      scene: settings.defaultScene, modelConfigId: settings.defaultModelConfigId, displayMode,
+      filePath
+    }
+    this.db.prepare(`
+      INSERT INTO drafts(id, content, created_at, updated_at, version, scene, model_config_id, display_mode, file_path)
+      VALUES ($id, $content, $createdAt, $updatedAt, $version, $scene, $modelConfigId, $displayMode, $filePath)
+    `).run({
+      $id: draft.id, $content: draft.content, $createdAt: draft.createdAt, $updatedAt: draft.updatedAt, $version: draft.version,
+      $scene: draft.scene, $modelConfigId: draft.modelConfigId, $displayMode: draft.displayMode, $filePath: draft.filePath
+    })
+    return draft
+  }
+
+  /** 把已有文稿转变为文件文稿（用于普通文稿另存到文件后绑定） */
+  bindDraftFile(id: string, filePath: string): void {
+    this.db.prepare('UPDATE drafts SET file_path = ? WHERE id = ?').run(filePath, id)
+  }
+
   createDraft(content = '', displayMode?: DisplayMode): Draft {
     const settings = this.getSettings()
     const now = Date.now()
     const initialContent = String(content)
     const draft: Draft = {
       id: randomUUID(), content: initialContent, createdAt: now, updatedAt: now, version: initialContent ? 1 : 0,
-      scene: settings.defaultScene, modelConfigId: settings.defaultModelConfigId, displayMode: displayMode ?? settings.defaultDisplayMode
+      scene: settings.defaultScene, modelConfigId: settings.defaultModelConfigId, displayMode: displayMode ?? settings.defaultDisplayMode,
+      filePath: null
     }
     this.db.prepare(`
       INSERT INTO drafts(id, content, created_at, updated_at, version, scene, model_config_id, display_mode)
@@ -333,7 +370,7 @@ export class DataStore {
     const rows = this.db.prepare(`
       SELECT d.id,
         substr(replace(replace(trim(d.content), char(13), ' '), char(10), ' '), 1, 120) AS summary,
-        d.updated_at, d.created_at, length(d.content) AS character_count, d.display_mode,
+        d.updated_at, d.created_at, length(d.content) AS character_count, d.display_mode, d.file_path,
         CASE WHEN d.id = $currentDraftId THEN 1 ELSE 0 END AS is_current,
         (SELECT w.id FROM window_states w WHERE w.draft_id = d.id AND w.is_open = 1
           ORDER BY w.last_active_at DESC LIMIT 1) AS open_window_id
@@ -343,7 +380,7 @@ export class DataStore {
       LIMIT $limit
     `).all(params) as Array<{
       id: string; summary: string; updated_at: number; created_at: number; character_count: number
-      display_mode: DisplayMode; is_current: number; open_window_id: string | null
+      display_mode: DisplayMode; is_current: number; open_window_id: string | null; file_path: string | null
     }>
     const hasMore = rows.length > limit
     const visibleRows = rows.slice(0, limit)
@@ -355,7 +392,8 @@ export class DataStore {
       characterCount: row.character_count,
       displayMode: row.display_mode,
       isCurrent: Boolean(row.is_current),
-      openWindowId: row.open_window_id
+      openWindowId: row.open_window_id,
+      filePath: row.file_path
     }))
     const lastItem = items.at(-1)
     return {
@@ -518,7 +556,8 @@ export class DataStore {
   private mapDraft(row: DraftRow): Draft {
     return {
       id: row.id, content: row.content, createdAt: row.created_at, updatedAt: row.updated_at,
-      version: row.version, scene: row.scene, modelConfigId: row.model_config_id, displayMode: row.display_mode
+      version: row.version, scene: row.scene, modelConfigId: row.model_config_id, displayMode: row.display_mode,
+      filePath: row.file_path ?? null
     }
   }
 

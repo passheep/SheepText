@@ -37,6 +37,53 @@ type PasteNotice = {
   range: { from: number; to: number }
   cleared: boolean
 }
+
+// F17 外部修改对话框状态
+const externalConflict = ref<{ draftId: string; path: string } | null>(null)
+let externalChecking = false
+
+// 窗口重新聚焦时检查文件是否被外部修改（仅文件文稿）
+async function checkExternalOnFocus(): Promise<void> {
+  if (externalChecking || !draft.value?.filePath || closing.value || externalConflict.value) return
+  externalChecking = true
+  try {
+    const result = await window.sheepText.checkExternalChange(draft.value.id)
+    if (result.changed && draft.value) {
+      if (result.missing) {
+        showToast({ type: 'error', message: '文件已被删除或移动，保存前请先另存到其他位置' })
+      } else if (result.path) {
+        externalConflict.value = { draftId: draft.value.id, path: result.path }
+      }
+    }
+  } catch {
+    // 检查失败不打扰用户
+  } finally {
+    externalChecking = false
+  }
+}
+
+// 外部修改处理：重新加载磁盘内容或用内存版本覆盖
+async function resolveExternal(action: 'reload' | 'keep'): Promise<void> {
+  const conflict = externalConflict.value
+  if (!conflict) return
+  externalConflict.value = null
+  try {
+    const result = await window.sheepText.resolveExternalChange(conflict.draftId, action)
+    if (action === 'reload' && draft.value?.id === conflict.draftId) {
+      // 直接更新数据源；编辑器由 modelValue watch 灌入新内容
+      draft.value.content = result.content
+      draft.value.version += 1
+      lastSavedVersion.value = draft.value.version
+      await nextTick()
+      if (result.convertedFromGbk) showToast({ type: 'info', message: '文件原为 GBK 编码，已按 UTF-8 重新加载' })
+    } else if (action === 'keep') {
+      showToast({ type: 'success', message: '已用当前内容覆盖磁盘文件' })
+      scheduleSave(40)
+    }
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  }
+}
 const pasteNotice = ref<PasteNotice | null>(null)
 let pasteNoticeTimer: ReturnType<typeof setTimeout> | null = null
 const PASTE_NOTICE_MS = 5000
@@ -250,6 +297,9 @@ onBeforeUnmount(() => {
 
 watch(() => [draft.value?.id, draft.value?.displayMode], hidePasteNotice)
 watch(interactionState, (state) => window.sheepText.setInteractionState(windowId, state), { deep: true })
+// 窗口从后台回到前台时检查文件是否被外部修改（F17）
+watch(() => document.hasFocus(), (focused) => { if (focused) void checkExternalOnFocus() })
+window.addEventListener('focus', () => void checkExternalOnFocus())
 watch(historyOpen, (open) => {
   if (open) void loadHistory(true)
 })
@@ -507,6 +557,8 @@ function setCurrentDraft(value: Draft): void {
   lastSavedVersion.value = value.version
   saveState.value = 'saved'
   Object.assign(selection, { from: 0, to: 0, text: '' })
+  // F19：文件文稿同步窗口标题为文件名
+  document.title = value.filePath ? value.filePath.split(/[\\/]/).pop() + ' - SheepText' : 'SheepText'
 }
 
 async function loadHistory(reset: boolean): Promise<void> {
@@ -759,7 +811,7 @@ async function saveAs(): Promise<void> {
     const snapshot: Draft = {
       id: draft.value.id, content: draft.value.content, createdAt: draft.value.createdAt,
       updatedAt: draft.value.updatedAt, version: draft.value.version, scene: draft.value.scene,
-      modelConfigId: draft.value.modelConfigId, displayMode: draft.value.displayMode
+      modelConfigId: draft.value.modelConfigId, displayMode: draft.value.displayMode, filePath: draft.value.filePath
     }
     const result = await window.sheepText.saveAs(snapshot)
     if (!result.canceled) showToast({ type: 'success', message: `已导出到 ${result.filePath}` })
@@ -845,7 +897,8 @@ function cleanError(error: unknown): string {
 
         <div class="window-brand">
           <img class="brand-logo" :src="appIcon" alt="SheepText" />
-          <span class="brand-name">SheepText</span>
+          <!-- F19：文件文稿标题区显示文件名，普通文稿保持品牌名 -->
+          <span class="brand-name" :title="draft.filePath ?? ''">{{ draft.filePath ? draft.filePath.replace(/^[\\/]+/, '').split(/[\\/]/).pop() : 'SheepText' }}</span>
           <span v-if="isDocked" class="dock-chip">已停靠</span>
         </div>
 
@@ -945,6 +998,20 @@ function cleanError(error: unknown): string {
             <span class="paste-notice-label">粘贴：{{ pasteNotice.cleared ? '已清除格式' : '保留原格式' }}</span>
             <button v-if="!pasteNotice.cleared" type="button" @click="clearPastedFormat">清除格式</button>
             <button type="button" class="paste-notice-close" title="关闭" @click="keepPastedFormat"><X :size="13" /></button>
+          </div>
+        </Transition>
+
+        <Transition name="modal">
+          <div v-if="externalConflict" class="external-conflict-overlay no-drag" @mousedown.self="externalConflict = null">
+            <div class="external-conflict-dialog" role="alertdialog" aria-modal="true" aria-label="检测到文件被外部修改">
+              <h3>文件已被外部修改</h3>
+              <p class="external-conflict-path">{{ externalConflict.path }}</p>
+              <p>磁盘上的文件内容已发生变化。重新加载会放弃当前窗口中未保存的修改；保留我的版本会用当前内容覆盖磁盘文件。</p>
+              <div class="external-conflict-actions">
+                <BaseButton variant="secondary" size="sm" @click="resolveExternal('reload')">重新加载磁盘内容</BaseButton>
+                <BaseButton variant="primary" size="sm" @click="resolveExternal('keep')">保留我的版本</BaseButton>
+              </div>
+            </div>
           </div>
         </Transition>
 

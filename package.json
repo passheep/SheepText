@@ -63,7 +63,27 @@
       "artifactName": "SheepText_${version}_${arch}-setup.${ext}",
       "icon": "resources/icon.ico",
       "executableName": "SheepText",
-      "signExecutable": false
+      "signExecutable": false,
+      "fileAssociations": [
+        {
+          "ext": "md",
+          "name": "Markdown 文档",
+          "description": "用 SheepText 编辑 Markdown 文档",
+          "icon": "resources/icon.ico"
+        },
+        {
+          "ext": "markdown",
+          "name": "Markdown 文档",
+          "description": "用 SheepText 编辑 Markdown 文档",
+          "icon": "resources/icon.ico"
+        },
+        {
+          "ext": "txt",
+          "name": "文本文档",
+          "description": "用 SheepText 编辑文本文档",
+          "icon": "resources/icon.ico"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,

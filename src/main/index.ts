@@ -29,7 +29,34 @@ if (process.env.SHEEPTEXT_TEST_USER_DATA) {
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
-app.on('second-instance', () => windows?.showRecentOrCreate())
+// 从命令行参数提取待打开的本地文件（需求 F15）
+function extractFileArgs(argv: string[]): string[] {
+  return argv.filter((arg) => /\.(txt|md|markdown)$/i.test(arg) && !arg.startsWith('-')).map((arg) => resolve(arg))
+}
+
+// 在主进程就绪后逐个打开文件（每个文件一个新窗口）
+async function openFilesFromArgs(argv: string[]): Promise<void> {
+  for (const filePath of extractFileArgs(argv)) {
+    try {
+      const existing = store?.findFileDraft(filePath)
+      const record = existing ? store?.getOpenWindowForDraft(existing.id) : null
+      if (record) { windows?.activateWindow(record.id); continue }
+      const { readTextFile } = await import('./file-drafts')
+      const { content } = await readTextFile(filePath)
+      const draft = existing ? existing : store!.createFileDraft(filePath, content, filePath.toLowerCase().match(/\.(md|markdown)$/i) ? 'markdown' : 'txt')
+      if (existing) store!.saveDraft({ id: existing.id, content, version: existing.version, scene: existing.scene, modelConfigId: existing.modelConfigId, displayMode: existing.displayMode })
+      await windows?.createWindowForDraft(draft.id)
+    } catch {
+      // 单个文件打开失败不阻断其他文件
+    }
+  }
+}
+
+app.on('second-instance', (_event, argv) => {
+  const files = extractFileArgs(argv)
+  if (files.length) void openFilesFromArgs(argv)
+  else windows?.showRecentOrCreate()
+})
 
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.sheeptext.desktop')
@@ -55,6 +82,8 @@ app.whenReady().then(async () => {
 
   const startHidden = process.argv.includes('--hidden')
   await windows.restoreWorkspace(startHidden)
+  // 冷启动命令行里携带的文件路径（文件关联/拖到图标）
+  await openFilesFromArgs(process.argv)
 
   app.on('activate', () => windows?.showRecentOrCreate())
 })
