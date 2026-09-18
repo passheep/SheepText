@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { copyLineDown, defaultKeymap, history, historyKeymap, redo, undo } from '@codemirror/commands'
+import { copyLineDown, defaultKeymap, history, historyKeymap, isolateHistory, redo, undo } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting, syntaxTree } from '@codemirror/language'
 import {
@@ -1056,11 +1056,21 @@ onMounted(() => {
         focus() { emit('focusChange', true); return false },
         blur() { emit('focusChange', false); return false },
         compositionstart() { emit('compositionChange', true); return false },
-        compositionend() { emit('compositionChange', false); return false }
+        compositionend(_event, view) {
+          emit('compositionChange', false)
+          // U02：一次输入法提交切成一步撤销。
+          // CodeMirror 会把连续的 input.type.compose 无条件并入上一步，
+          // 中文连打因此会被并成一整段；isolateHistory 把当前分组封口。
+          // 等组合的 DOM 变更被输入处理收完后再封口，避免提交内容被切到下一组。
+          queueMicrotask(() => view.dispatch({ annotations: isolateHistory.of('after') }))
+          return false
+        }
       })
     ]
   })
   view = new EditorView({ state, parent: host.value })
+  // 关闭拼写检查，避免英文单词被画上红色波浪线
+  view.contentDOM.setAttribute('spellcheck', 'false')
   emitSelection(state)
 })
 

@@ -10,7 +10,7 @@ import type {
   PastedImageInput,
   SheepTextApi,
   ToastPayload,
-  WindowAction, WindowInteractionState
+  WindowAction, WindowInteractionState, WindowTabsResult
 } from '../shared/types'
 
 const api: SheepTextApi = {
@@ -18,6 +18,19 @@ const api: SheepTextApi = {
   saveDraft: (input: DraftSaveInput) => ipcRenderer.invoke('draft:save', currentWindowId(), input),
   createDraft: (windowId: string) => ipcRenderer.invoke('draft:create', windowId),
   openDraft: (windowId: string, draftId: string) => ipcRenderer.invoke('draft:open', windowId, draftId),
+  newTab: (windowId: string) => ipcRenderer.invoke('window:new-tab', windowId),
+  /** 读取当前窗口的标签列表与活动文稿 */
+  windowTabs: (windowId: string) => ipcRenderer.invoke('window:tabs', windowId),
+  // U08/U09：跨窗口拖动标签与拖出成新窗口
+  beginTabDrag: (windowId: string, draftId: string) => ipcRenderer.invoke('window:tab-drag-start', windowId, draftId),
+  endTabDrag: (windowId: string) => ipcRenderer.invoke('window:tab-drag-end', windowId),
+  dropTab: (windowId: string, position: number | null) => ipcRenderer.invoke('window:tab-drop', windowId, position),
+  detachTab: (windowId: string) => ipcRenderer.invoke('window:tab-detach', windowId),
+  /** 其他窗口移走/移入标签后，本窗口的标签列表变化通知 */
+  onTabsChanged: (callback: (state: WindowTabsResult) => void) => subscribe('window:tabs-changed', callback),
+  closeTab: (windowId: string, draftId: string) => ipcRenderer.invoke('window:close-tab', windowId, draftId),
+  activateTab: (windowId: string, draftId: string) => ipcRenderer.invoke('window:activate-tab', windowId, draftId),
+  reorderTabs: (windowId: string, orderedDraftIds: string[]) => ipcRenderer.invoke('window:reorder-tabs', windowId, orderedDraftIds),
   searchHistory: (query: HistoryQuery) => ipcRenderer.invoke('history:search', currentWindowId(), query),
   deleteDraft: (windowId: string, draftId: string) => ipcRenderer.invoke('draft:delete', windowId, draftId),
   newWindow: () => ipcRenderer.invoke('window:new', currentWindowId()),

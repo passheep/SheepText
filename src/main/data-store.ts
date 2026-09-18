@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { basename, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { safeStorage } from 'electron'
-import { DEFAULT_SETTINGS } from '../shared/constants'
+import { DEFAULT_SETTINGS, LEGACY_DEFAULT_THEME_COLOR } from '../shared/constants'
 import { normalizeFilePath } from './file-drafts'
 import type {
   AppSettings, ApiProtocol, DisplayMode, Draft, DraftSaveInput, DraftSummary,
@@ -122,6 +122,12 @@ export class DataStore {
         last_active_at INTEGER NOT NULL,
         FOREIGN KEY (draft_id) REFERENCES drafts(id)
       );
+      CREATE TABLE IF NOT EXISTS window_tabs (
+        window_id TEXT NOT NULL,
+        draft_id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        PRIMARY KEY (window_id, draft_id)
+      );
       CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -129,12 +135,18 @@ export class DataStore {
       CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS idx_windows_draft_open ON window_states(draft_id, is_open);
       CREATE INDEX IF NOT EXISTS idx_windows_active ON window_states(is_open, last_active_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_window_tabs_window ON window_tabs(window_id, position);
     `)
     // F14 迁移：旧库补 file_path 列（null=普通文稿，非空=本地文件文稿）
     const draftColumns = this.db.prepare('PRAGMA table_info(drafts)').all() as Array<{ name: string }>
     if (!draftColumns.some((column) => column.name === 'file_path')) {
       this.db.exec('ALTER TABLE drafts ADD COLUMN file_path TEXT')
     }
+    // F16 迁移：旧库每个窗口补一条标签；活动文稿仍由 window_states.draft_id 表示。
+    this.db.exec(`
+      INSERT OR IGNORE INTO window_tabs(window_id, draft_id, position)
+      SELECT id, draft_id, 0 FROM window_states
+    `)
     const row = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get('app') as { value: string } | undefined
     if (!row) this.db.prepare('INSERT INTO app_settings(key, value) VALUES (?, ?)').run('app', JSON.stringify(DEFAULT_SETTINGS))
   }
@@ -153,7 +165,8 @@ export class DataStore {
   exportPayload(): Record<string, unknown> {
     const drafts = this.db.prepare('SELECT id, content, created_at AS createdAt, updated_at AS updatedAt, version, scene, model_config_id AS modelConfigId, display_mode AS displayMode FROM drafts ORDER BY updated_at DESC').all()
     const windows = this.db.prepare('SELECT id, draft_id AS draftId, x, y, width, height, display_id AS displayId, dock_side AS dockSide, is_docked AS isDocked, expanded_x AS expandedX, expanded_y AS expandedY, always_on_top AS alwaysOnTop, is_open AS isOpen, last_active_at AS lastActiveAt FROM window_states ORDER BY last_active_at DESC').all()
-    return { exportedAt: new Date().toISOString(), settings: this.getSettings(), models: this.listModels(), drafts, windows }
+    const windowTabs = this.db.prepare('SELECT window_id AS windowId, draft_id AS draftId, position FROM window_tabs ORDER BY window_id ASC, position ASC').all()
+    return { exportedAt: new Date().toISOString(), settings: this.getSettings(), models: this.listModels(), drafts, windows, windowTabs }
   }
 
   transaction<T>(work: () => T): T {
@@ -206,7 +219,10 @@ export class DataStore {
         ? merged.theme
         : DEFAULT_SETTINGS.theme,
       themeColor: typeof merged.themeColor === 'string' && /^#[0-9a-f]{6}$/i.test(merged.themeColor)
-        ? merged.themeColor.toLowerCase()
+        // 仍停留在旧默认主题色的用户跟随新默认值；自定义过的颜色一律保留。
+        ? (merged.themeColor.toLowerCase() === LEGACY_DEFAULT_THEME_COLOR
+            ? DEFAULT_SETTINGS.themeColor
+            : merged.themeColor.toLowerCase())
         : DEFAULT_SETTINGS.themeColor,
       fontSize: typeof merged.fontSize === 'number' && Number.isFinite(merged.fontSize)
         ? Math.max(13, Math.min(26, Math.round(merged.fontSize)))
@@ -224,7 +240,7 @@ export class DataStore {
         ? merged.defaultModelConfigId
         : null,
       defaultDisplayMode: merged.defaultDisplayMode === 'markdown' ? 'markdown' : 'txt',
-      editorBackground: merged.editorBackground === 'white' || merged.editorBackground === 'black'
+      editorBackground: merged.editorBackground === 'blend' || merged.editorBackground === 'white' || merged.editorBackground === 'black'
         || merged.editorBackground === 'eye-care' || merged.editorBackground === 'paper' || merged.editorBackground === 'kraft'
         ? merged.editorBackground
         : 'auto',
@@ -349,6 +365,8 @@ export class DataStore {
       if (!draft) throw new Error('文稿不存在或已被删除')
       const openWindow = this.getOpenWindowForDraft(id)
       if (openWindow) throw new Error('该文稿仍在窗口中打开，请先关闭对应窗口')
+      // F16：同步清理标签行，避免 window_tabs 悬挂引用已删除的文稿。
+      this.db.prepare('DELETE FROM window_tabs WHERE draft_id = ?').run(id)
       this.db.prepare('DELETE FROM window_states WHERE draft_id = ?').run(id)
       this.db.prepare('DELETE FROM drafts WHERE id = ?').run(id)
     })
@@ -378,7 +396,8 @@ export class DataStore {
         substr(replace(replace(trim(d.content), char(13), ' '), char(10), ' '), 1, 120) AS summary,
         d.updated_at, d.created_at, length(d.content) AS character_count, d.display_mode, d.file_path,
         CASE WHEN d.id = $currentDraftId THEN 1 ELSE 0 END AS is_current,
-        (SELECT w.id FROM window_states w WHERE w.draft_id = d.id AND w.is_open = 1
+        (SELECT w.id FROM window_tabs t JOIN window_states w ON w.id = t.window_id
+          WHERE t.draft_id = d.id AND w.is_open = 1
           ORDER BY w.last_active_at DESC LIMIT 1) AS open_window_id
       FROM drafts d
       WHERE length(trim(d.content)) > 0 ${searchCondition} ${cursorCondition}
@@ -496,6 +515,8 @@ export class DataStore {
       alwaysOnTop: false, fixedExpanded: false, isOpen: true, lastActiveAt: Date.now()
     }
     this.upsertWindow(record)
+    // F16：新窗口自带首个标签，保证窗口永远至少有一个标签。
+    this.addWindowTab(record.id, draftId)
     return record
   }
 
@@ -533,15 +554,66 @@ export class DataStore {
     return rows.map((row) => this.mapWindow(row))
   }
 
+  /** 设置窗口当前活动文稿（window_states.draft_id 仍表示活动标签）。 */
   setWindowDraft(windowId: string, draftId: string): void {
     this.db.prepare('UPDATE window_states SET draft_id = ?, last_active_at = ?, is_open = 1 WHERE id = ?')
       .run(draftId, Date.now(), windowId)
   }
 
+  /** 按 position 升序返回窗口内的标签文稿 id。 */
+  listWindowTabs(windowId: string): string[] {
+    const rows = this.db.prepare('SELECT draft_id FROM window_tabs WHERE window_id = ? ORDER BY position ASC').all(windowId) as Array<{ draft_id: string }>
+    return rows.map((row) => row.draft_id)
+  }
+
+  /** 追加标签到末尾（已存在则不重复），并把该文稿设为窗口活动文稿。 */
+  addWindowTab(windowId: string, draftId: string): void {
+    this.transaction(() => {
+      const existing = this.db.prepare('SELECT 1 FROM window_tabs WHERE window_id = ? AND draft_id = ?').get(windowId, draftId)
+      if (!existing) {
+        const row = this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS nextPosition FROM window_tabs WHERE window_id = ?').get(windowId) as { nextPosition: number }
+        this.db.prepare('INSERT INTO window_tabs(window_id, draft_id, position) VALUES (?, ?, ?)').run(windowId, draftId, row.nextPosition)
+      }
+      this.setWindowDraft(windowId, draftId)
+    })
+  }
+
+  removeWindowTab(windowId: string, draftId: string): void {
+    this.db.prepare('DELETE FROM window_tabs WHERE window_id = ? AND draft_id = ?').run(windowId, draftId)
+  }
+
+  /** 按数组下标重排 position；只处理确实属于该窗口的 id，未知 id 直接忽略。 */
+  reorderWindowTabs(windowId: string, orderedDraftIds: string[]): void {
+    this.transaction(() => {
+      const known = new Set(this.listWindowTabs(windowId))
+      const update = this.db.prepare('UPDATE window_tabs SET position = ? WHERE window_id = ? AND draft_id = ?')
+      let position = 0
+      for (const draftId of orderedDraftIds) {
+        if (!known.has(draftId)) continue
+        update.run(position, windowId, draftId)
+        position += 1
+      }
+    })
+  }
+
+  countWindowTabs(windowId: string): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM window_tabs WHERE window_id = ?').get(windowId) as { count: number }
+    return row.count
+  }
+
+  /** 经 window_tabs 判定文稿是否已在打开窗口的任一标签中（活动或后台标签都算）。 */
   getOpenWindowForDraft(draftId: string, exceptWindowId?: string): WindowRecord | null {
     const statement = exceptWindowId
-      ? this.db.prepare('SELECT * FROM window_states WHERE draft_id = ? AND is_open = 1 AND id <> ? ORDER BY last_active_at DESC LIMIT 1')
-      : this.db.prepare('SELECT * FROM window_states WHERE draft_id = ? AND is_open = 1 ORDER BY last_active_at DESC LIMIT 1')
+      ? this.db.prepare(`
+          SELECT w.* FROM window_tabs t JOIN window_states w ON w.id = t.window_id
+          WHERE t.draft_id = ? AND w.is_open = 1 AND w.id <> ?
+          ORDER BY w.last_active_at DESC LIMIT 1
+        `)
+      : this.db.prepare(`
+          SELECT w.* FROM window_tabs t JOIN window_states w ON w.id = t.window_id
+          WHERE t.draft_id = ? AND w.is_open = 1
+          ORDER BY w.last_active_at DESC LIMIT 1
+        `)
     const row = (exceptWindowId ? statement.get(draftId, exceptWindowId) : statement.get(draftId)) as WindowRow | undefined
     return row ? this.mapWindow(row) : null
   }

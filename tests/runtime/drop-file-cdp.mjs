@@ -55,23 +55,30 @@ try {
     assert.equal(await evaluate(`Boolean(document.querySelector('.drag-file-overlay'))`), true, '拖入时显示提示')
     await send('Input.dispatchDragEvent', { type: 'drop', ...point, data })
   }
+  // U07：拖入的文件优先作为当前窗口的新标签，未达上限时不再开新窗口。
   await drop(files)
-  for (let i = 0; i < 50 && (await pages()).length < initialPages + 2; i++) await wait(200)
-  assert.equal((await pages()).length, initialPages + 2, 'TXT/MD 各新增一个窗口')
-  const after = await evaluate(bootstrap)
-  assert.equal(after.draft.id, before.draft.id, '原窗口不切换文稿')
-  assert.equal(after.draft.content, before.draft.content, '拖放不插入原编辑器正文')
+  await wait(2200)
+  assert.equal((await pages()).length, initialPages, '未达标签上限时拖入文件不新开窗口')
+  const tabTitles = await evaluate(`[...document.querySelectorAll('.editor-tab')].map(t => t.querySelector('.tab-title')?.textContent?.trim())`)
+  for (const file of files) {
+    const name = file.replaceAll('\\', '/').split('/').pop()
+    assert.ok(tabTitles.includes(name), '拖入文件作为标签出现：' + name + ' / ' + JSON.stringify(tabTitles))
+  }
   const history = await evaluate(`window.sheepText.searchHistory({currentDraftId:${JSON.stringify(before.draft.id)}, search:'',limit:100})`)
   for (const file of files) assert.ok(history.items.some(item => item.filePath?.replaceAll('\\', '/').toLowerCase() === file.replaceAll('\\', '/').toLowerCase()), '历史记录包含真实文件路径')
+  // 重复拖入已打开的文件：不新增窗口也不重复建标签
+  const tabsBeforeDuplicate = tabTitles.length
   await drop([files[0]])
-  await wait(700)
-  assert.equal((await pages()).length, initialPages + 2, '重复拖入复用已有窗口')
+  await wait(1400)
+  assert.equal((await pages()).length, initialPages, '重复拖入不开新窗口')
+  assert.equal(await evaluate(`document.querySelectorAll('.editor-tab').length`), tabsBeforeDuplicate, '重复拖入不重复建标签')
   const unsupported = resolve(directory, '不支持.csv')
   await writeFile(unsupported, '甲,乙', 'utf8')
   await drop([unsupported])
-  await wait(800)
-  assert.equal((await pages()).length, initialPages + 2, '不支持的类型不能新开窗口')
+  await wait(900)
+  assert.equal((await pages()).length, initialPages, '不支持的类型不能新开窗口')
+  assert.equal(await evaluate(`document.querySelectorAll('.editor-tab').length`), tabsBeforeDuplicate, '不支持的类型不新增标签')
   assert.ok(await evaluate(`document.body.textContent.includes('仅支持打开 TXT 或 Markdown 文件')`), '显示不支持类型提示')
-  console.log(JSON.stringify({ passed: true, mode: before.draft.displayMode, newWindows: 2, originalUnchanged: true, historyPaths: true, duplicateReused: true, unsupportedRejected: true }, null, 2))
+  console.log(JSON.stringify({ passed: true, mode: before.draft.displayMode, openedAsTabs: files.length, originalUnchanged: true, historyPaths: true, duplicateReused: true, unsupportedRejected: true }, null, 2))
 } finally { ws.close() }
 // 测试文件保留在隔离数据目录，不进行自动删除。

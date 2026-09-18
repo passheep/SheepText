@@ -51,7 +51,7 @@ const themeOptions: SelectOption[] = [
   { value: 'dark', label: '深色', description: '低亮度环境下更舒适' }
 ]
 const themeColorPresets = [
-  { value: '#6958cf', label: '薰衣草紫' }, { value: '#1f56f5', label: '晴空蓝' },
+  { value: '#6958bb', label: '薰衣草紫' }, { value: '#1f56f5', label: '晴空蓝' },
   { value: '#0f9f8f', label: '薄荷青' }, { value: '#e67e22', label: '暖橙' },
   { value: '#d14d72', label: '玫瑰红' }, { value: '#5b6b8c', label: '雾霾蓝' }
 ]
@@ -61,6 +61,7 @@ const displayModeOptions: SelectOption[] = [
 ]
 const editorBackgroundOptions: SelectOption[] = [
   { value: 'auto', label: '跟随界面', description: '自动匹配当前明暗主题' },
+  { value: 'blend', label: '融合', description: '与标题栏同色，整体更连贯' },
   { value: 'white', label: '纯白', description: '干净明亮的白色画布' },
   { value: 'black', label: '纯黑', description: '低亮度的黑色沉浸画布' },
   { value: 'eye-care', label: '护眼绿', description: '柔和低饱和绿色' },

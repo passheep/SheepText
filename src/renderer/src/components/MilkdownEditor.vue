@@ -4,6 +4,7 @@ import '@milkdown/crepe/theme/common/style.css'
 import '@milkdown/crepe/theme/classic.css'
 import { editorViewCtx, prosePluginsCtx } from '@milkdown/kit/core'
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
+import { closeHistory } from '@milkdown/prose/history'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Plugin, TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -80,6 +81,9 @@ let localFontSize = props.fontSize
 let pendingExternalMarkdown: string | null = null
 let cursorUpdateFrame = 0
 
+// 手柄相对首行中心的视觉微调：整体再向右下移动，使图标看起来与文字行齐平
+const HANDLE_NUDGE = 1.5
+
 // 取块内首行正文的矩形：列表等结构的行盒不在块元素自身，需下钻到首个正文文本
 function measureFirstLine(el: HTMLElement, blockRect: DOMRect): { top: number; height: number } {
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
@@ -153,11 +157,13 @@ onMounted(async () => {
       [CrepeFeature.BlockEdit]: {
         // 操作柄对齐首行文字中心：仅把首行区域交给定位，避免整段居中或顶对齐造成高低不一。
         blockHandle: {
-          getOffset: () => 5,
+          // 手柄整体向右下微调：左放置时 offset 越小越靠右，纵向在首行基线上再加偏移
+          getOffset: () => 5 - HANDLE_NUDGE,
           getPosition: ({ active }) => {
             const rect = active.el.getBoundingClientRect()
             const line = measureFirstLine(active.el, rect)
-            return { x: rect.x, y: line.top, width: rect.width, height: line.height, top: line.top, right: rect.right, bottom: line.top + line.height, left: rect.left }
+            const top = line.top + HANDLE_NUDGE
+            return { x: rect.x, y: top, width: rect.width, height: line.height, top, right: rect.right, bottom: top + line.height, left: rect.left }
           },
           // 位置已是首行区域，居中即可与文字同行。
           getPlacement: () => 'left'
@@ -258,6 +264,8 @@ onMounted(async () => {
     await crepe.create()
     editorView = crepe.editor.action((ctx) => ctx.get(editorViewCtx))
     editorView.setProps({ decorations: () => searchDecorations })
+    // ProseMirror 默认给可编辑区开启拼写检查，这里显式关闭以避免英文单词下的红色波浪线
+    editorView.dom.setAttribute('spellcheck', 'false')
     editorView.dom.addEventListener('paste', onPasteCapture, true)
     editorView.dom.addEventListener('compositionstart', onCompositionStart)
     editorView.dom.addEventListener('compositionend', onCompositionEnd)
@@ -346,6 +354,14 @@ function onCompositionStart(): void {
 
 function onCompositionEnd(): void {
   emit('compositionChange', false)
+  // U02：一次输入法提交切成一步撤销。
+  // ProseMirror 默认按 500ms 合并历史，中文连打会被并成一整段；
+  // 这里补一个带 closeHistory 的空事务，把下一步强制开成新分组。
+  // 需等本次组合的 DOM 变更被观察器收完，否则切断过早会把提交内容挤进下一组。
+  queueMicrotask(() => {
+    if (!editorView || props.readonly) return
+    editorView.dispatch(closeHistory(editorView.state.tr))
+  })
 }
 
 function onEditorClick(event: MouseEvent): void {

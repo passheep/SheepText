@@ -20,6 +20,8 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
   const files = new FileDraftService(store, {
     activateWindow: (id) => windows.activateWindow(id),
     createWindow: (id) => windows.createWindowForDraft(id),
+    // U07：拖入/选择打开的文件优先放进当前窗口的标签栏，标签已满时再开新窗口。
+    openTab: (windowId, draftId) => windows.openDraftInTab(windowId, draftId),
     toast: (id, payload) => {
       const record = store.getOpenWindowForDraft(id)
       const window = record ? windows.getBrowserWindow(record.id) : null
@@ -40,6 +42,7 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     return {
       windowId,
       draft,
+      tabs: windows.windowTabs(windowId),
       settings: store.getSettings(),
       models: store.listModels(),
       window: windowRecord,
@@ -67,13 +70,27 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     const draft = store.getDraft(draftId)
     if (!draft) throw new Error('文稿不存在或已被移除')
     if (draft.filePath) {
-      const result = await files.openLocalFile(draft.filePath)
-      return { activatedExistingWindow: true, draft: result.draft }
+      // 本地文件同样优先作为当前窗口的新标签；已在别的窗口打开则激活那个窗口。
+      const result = await files.openLocalFile(draft.filePath, undefined, windowId)
+      if (result.reused) return { activatedExistingWindow: true, draft: result.draft }
+      if (result.openedInNewWindow === false) {
+        return {
+          activatedExistingWindow: false, openedInNewWindow: false,
+          draft: store.getDraft(draftId) ?? result.draft, tabs: windows.windowTabs(windowId)
+        }
+      }
+      return { activatedExistingWindow: false, openedInNewWindow: true, draft: result.draft }
     }
+    // F16：文稿已在其他窗口的标签中时激活那个窗口；否则在当前窗口作为新标签打开，不替换当前文稿。
     const opened = store.getOpenWindowForDraft(draftId, windowId)
     if (opened && windows.activateWindow(opened.id)) return { activatedExistingWindow: true }
+    // U05：当前窗口标签已满时，该文稿改为在新窗口中打开。
+    if (windows.isTabLimitReached(windowId)) {
+      const newWindowId = await windows.createWindowForDraft(draftId)
+      return { activatedExistingWindow: false, draft, openedInNewWindow: true, windowId: newWindowId }
+    }
     windows.switchDraft(windowId, draftId)
-    return { activatedExistingWindow: false, draft }
+    return { activatedExistingWindow: false, draft, tabs: windows.windowTabs(windowId), openedInNewWindow: false }
   })
 
   ipcMain.handle('history:search', (event, windowId: string, query: HistoryQuery) => {
@@ -92,19 +109,99 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
       if (!target) throw new Error('文稿不存在或已被移除')
       // 必须先回收成功；失败（含文件已丢失）原样抛出，不能先切换或删除 DB。
       if (target.filePath) await shell.trashItem(target.filePath)
-      let replacementDraft: Draft | undefined
-      if (store.getWindow(windowId)?.draftId === draftId) {
-        replacementDraft = store.createDraft()
-        windows.switchDraft(windowId, replacementDraft.id)
-      }
+      // F16：删除文稿前先关闭对应标签，保证窗口始终至少有一个活动文稿。
+      const wasActive = store.getWindow(windowId)?.draftId === draftId
+      windows.closeTab(windowId, draftId)
+      const replacementDraft = wasActive
+        ? store.getDraft(store.getWindow(windowId)?.draftId ?? '') ?? undefined
+        : undefined
       store.deleteDraft(draftId)
-      return { deletedId: draftId, replacementDraft }
+      return { deletedId: draftId, replacementDraft, tabs: windows.windowTabs(windowId) }
     })
   })
 
   ipcMain.handle('window:new', (event, windowId: string) => {
     assertWindow(event, windowId)
     return windows.createNewWindow(true)
+  })
+
+  // F16：窗口内多标签操作，均校验窗口身份并返回最新标签列表。
+  ipcMain.handle('window:new-tab', (event, windowId: string) => {
+    assertWindow(event, windowId)
+    // U05：标签已达上限时改为开新窗口，当前窗口的标签与活动文稿保持不变。
+    if (windows.isTabLimitReached(windowId)) {
+      void windows.createNewWindow(true)
+      const current = store.getDraft(store.getWindow(windowId)?.draftId ?? '')
+      if (!current) throw new Error('新建标签页失败')
+      return { tabs: windows.windowTabs(windowId), draft: current, openedInNewWindow: true }
+    }
+    const tabs = windows.newTab(windowId)
+    const draft = store.getDraft(store.getWindow(windowId)?.draftId ?? '')
+    if (!draft) throw new Error('新建标签页失败')
+    return { tabs, draft, openedInNewWindow: false }
+  })
+
+  /** 读取当前窗口的标签列表与活动文稿，供拖入文件后同步界面。 */
+  ipcMain.handle('window:tabs', (event, windowId: string) => {
+    assertWindow(event, windowId)
+    const draft = store.getDraft(store.getWindow(windowId)?.draftId ?? '')
+    if (!draft) throw new Error('窗口活动文稿不存在')
+    return { tabs: windows.windowTabs(windowId), draft }
+  })
+
+  // U08/U09：跨窗口拖动标签。来源窗口登记拖拽，目标窗口落点或来源窗口拖出。
+  ipcMain.handle('window:tab-drag-start', (event, windowId: string, draftId: string) => {
+    assertWindow(event, windowId)
+    windows.beginTabDrag(windowId, draftId)
+  })
+
+  ipcMain.handle('window:tab-drag-end', (event, windowId: string) => {
+    assertWindow(event, windowId)
+    windows.endTabDrag()
+  })
+
+  ipcMain.handle('window:tab-drop', (event, windowId: string, position: number | null) => {
+    assertWindow(event, windowId)
+    const drag = windows.currentTabDrag()
+    if (!drag) return { moved: false }
+    const at = typeof position === 'number' && Number.isFinite(position) ? Math.max(0, Math.round(position)) : null
+    const moved = windows.moveTabBetweenWindows(drag.windowId, windowId, drag.draftId, at)
+    windows.endTabDrag()
+    const draft = store.getDraft(store.getWindow(windowId)?.draftId ?? '')
+    if (!draft) throw new Error('窗口活动文稿不存在')
+    return { moved, tabs: windows.windowTabs(windowId), draft }
+  })
+
+  ipcMain.handle('window:tab-detach', async (event, windowId: string) => {
+    assertWindow(event, windowId)
+    const drag = windows.currentTabDrag()
+    if (!drag || drag.windowId !== windowId) return { detached: false }
+    const detached = await windows.detachTabToNewWindow(windowId, drag.draftId)
+    windows.endTabDrag()
+    return { detached }
+  })
+
+  ipcMain.handle('window:close-tab', (event, windowId: string, draftId: string) => {
+    assertWindow(event, windowId)
+    windows.closeTab(windowId, draftId)
+    const draft = store.getDraft(store.getWindow(windowId)?.draftId ?? '')
+    if (!draft) throw new Error('关闭标签页后活动文稿不存在')
+    return { tabs: windows.windowTabs(windowId), draft }
+  })
+
+  ipcMain.handle('window:activate-tab', (event, windowId: string, draftId: string) => {
+    assertWindow(event, windowId)
+    const draft = store.getDraft(draftId)
+    if (!draft) throw new Error('文稿不存在或已被移除')
+    windows.activateTab(windowId, draftId)
+    return { tabs: windows.windowTabs(windowId), draft }
+  })
+
+  ipcMain.handle('window:reorder-tabs', (event, windowId: string, orderedDraftIds: string[]) => {
+    assertWindow(event, windowId)
+    if (!Array.isArray(orderedDraftIds) || orderedDraftIds.some((id) => typeof id !== 'string')) throw new Error('标签顺序参数无效')
+    windows.reorderTabs(windowId, orderedDraftIds)
+    return windows.windowTabs(windowId)
   })
 
   ipcMain.handle('models:list', (event, windowId: string) => {
@@ -172,13 +269,18 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
       title: '从文件中打开', properties: ['openFile'], filters: [{ name: 'SheepText 文稿', extensions: ['txt', 'md', 'markdown'] }]
     })
     if (result.canceled || !result.filePaths[0]) return { canceled: true, openedInNewWindow: true }
-    const resultOpen = await files.openLocalFile(result.filePaths[0])
-    return { canceled: false, filePath: resultOpen.draft.filePath, draft: resultOpen.draft, openedInNewWindow: true }
+    // U07：菜单打开的文件同样优先作为当前窗口的新标签
+    const resultOpen = await files.openLocalFile(result.filePaths[0], undefined, windowId)
+    return {
+      canceled: false, filePath: resultOpen.draft.filePath, draft: resultOpen.draft,
+      openedInNewWindow: resultOpen.openedInNewWindow !== false
+    }
   })
 
   ipcMain.handle('file:open', (event, windowId: string, filePath: string) => {
     assertWindow(event, windowId)
-    return files.openLocalFile(filePath)
+    // 拖入或主动打开的文件优先作为当前窗口的新标签
+    return files.openLocalFile(filePath, undefined, windowId)
   })
 
   ipcMain.handle('file:check-external', async (event, windowId: string, draftId: string) => {

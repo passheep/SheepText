@@ -2,7 +2,7 @@ export type SceneId = 'general' | 'coding' | 'image'
 export type EnhanceMode = 'conservative' | 'creative'
 export type DisplayMode = 'txt' | 'markdown'
 export type ThemeMode = 'system' | 'light' | 'dark'
-export type EditorBackground = 'auto' | 'white' | 'black' | 'eye-care' | 'paper' | 'kraft'
+export type EditorBackground = 'auto' | 'blend' | 'white' | 'black' | 'eye-care' | 'paper' | 'kraft'
 export type EditorPattern = 'none' | 'grid-large' | 'grid-small' | 'lines' | 'waves'
 export type ProviderType = 'deepseek' | 'openai' | 'openai-compatible'
 export type ApiProtocol = 'chat-completions' | 'responses'
@@ -116,6 +116,7 @@ export interface WindowRecord {
 export interface WindowBootstrap {
   windowId: string
   draft: Draft
+  tabs: WindowTab[]
   settings: AppSettings
   models: ModelConfigPublic[]
   window: WindowRecord
@@ -123,14 +124,39 @@ export interface WindowBootstrap {
   encryptionAvailable: boolean
 }
 
+/** 窗口内标签页：标题由主进程根据文件名或首行摘要生成，未保存状态由渲染层维护 */
+export interface WindowTab {
+  draftId: string
+  title: string
+  displayMode: DisplayMode
+  filePath: string | null
+}
+
+export interface WindowTabsResult {
+  tabs: WindowTab[]
+  draft: Draft
+  /** 因当前窗口标签已满而改在新窗口新建 */
+  openedInNewWindow?: boolean
+}
+
+export interface TabDropResult {
+  moved: boolean
+  tabs?: WindowTab[]
+  draft?: Draft
+}
+
 export interface OpenDraftResult {
   activatedExistingWindow: boolean
   draft?: Draft
+  tabs?: WindowTab[]
+  /** 因当前窗口标签已满而改在新窗口打开 */
+  openedInNewWindow?: boolean
 }
 
 export interface DeleteDraftResult {
   deletedId: string
   replacementDraft?: Draft
+  tabs?: WindowTab[]
 }
 
 export interface AiRequest {
@@ -208,7 +234,7 @@ export interface SheepTextApi {
   bootstrap: (windowId: string) => Promise<WindowBootstrap>
   saveDraft: (input: DraftSaveInput) => Promise<Draft>
   /** 打开本地文件为文件文稿（新窗口）；reused 表示该文件已在窗口中打开；convertedFromGbk 表示非 UTF-8 已转换 */
-  openLocalFile: (filePath: string) => Promise<{ opened: boolean; windowId: string; draft: Draft; snapshot?: { mtimeMs: number; size: number } | null; reused?: boolean; convertedFromGbk?: boolean }>
+  openLocalFile: (filePath: string) => Promise<{ opened: boolean; windowId: string; draft: Draft; snapshot?: { mtimeMs: number; size: number } | null; reused?: boolean; convertedFromGbk?: boolean; openedInNewWindow?: boolean }>
   /** 取拖入 File 对象的磁盘路径（Electron webUtils） */
   getPathForFile: (file: File) => string
   /** 检查文件文稿是否被外部修改（窗口重新聚焦时调用） */
@@ -217,6 +243,23 @@ export interface SheepTextApi {
   resolveExternalChange: (draftId: string, action: 'reload' | 'keep', input: DraftSaveInput) => Promise<{ draft: Draft }>
   createDraft: (windowId: string) => Promise<Draft>
   openDraft: (windowId: string, draftId: string) => Promise<OpenDraftResult>
+  /** 新建标签页（新建空白文稿并在当前窗口打开） */
+  newTab: (windowId: string) => Promise<WindowTabsResult>
+  /** 读取当前窗口的标签列表与活动文稿 */
+  windowTabs: (windowId: string) => Promise<WindowTabsResult>
+  // U08/U09：跨窗口拖动标签与拖出成新窗口
+  beginTabDrag: (windowId: string, draftId: string) => Promise<void>
+  endTabDrag: (windowId: string) => Promise<void>
+  dropTab: (windowId: string, position: number | null) => Promise<TabDropResult>
+  detachTab: (windowId: string) => Promise<{ detached: boolean }>
+  /** 其他窗口移走/移入标签后，本窗口的标签列表变化通知 */
+  onTabsChanged: (callback: (state: WindowTabsResult) => void) => () => void
+  /** 关闭标签页；关闭最后一个时自动补一个空白文稿 */
+  closeTab: (windowId: string, draftId: string) => Promise<WindowTabsResult>
+  /** 切换当前标签页 */
+  activateTab: (windowId: string, draftId: string) => Promise<WindowTabsResult>
+  /** 拖动排序后保存标签顺序 */
+  reorderTabs: (windowId: string, orderedDraftIds: string[]) => Promise<WindowTab[]>
   searchHistory: (query: HistoryQuery) => Promise<HistoryPage>
   deleteDraft: (windowId: string, draftId: string) => Promise<DeleteDraftResult>
   newWindow: () => Promise<void>

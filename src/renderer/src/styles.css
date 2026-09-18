@@ -116,6 +116,8 @@
 .workspace{--editor-base:var(--bg);background-color:var(--editor-base);background-image:none!important}
 .workspace:after{display:none}
 .workspace.editor-bg-auto{--editor-base:var(--bg)}
+/* 融合：与标题栏同一配方（surface-solid 82% 叠在背景上），浅色约 #faf8f5、深色约 #19191b */
+.workspace.editor-bg-blend{--editor-base:color-mix(in srgb,var(--surface-solid) 82%,var(--bg))}
 .workspace.editor-bg-white{--editor-base:#fff;--text-primary:#1f232b;--text-secondary:#646b76;--text-tertiary:#9a9fa8;--md-heading:#493ba8;--md-marker:#6d5bd0;--md-code:#91481f;--md-link:#2166ae}
 .workspace.editor-bg-black{--editor-base:#08090b;--text-primary:#f5f5f7;--text-secondary:#c3c4ca;--text-tertiary:#85878f;--md-heading:#c9bcff;--md-marker:#a797f2;--md-code:#f0ae75;--md-link:#75b7ff}
 .workspace.editor-bg-eye-care{--editor-base:#e6efdf;--text-primary:#263229;--text-secondary:#5c685f;--text-tertiary:#879087;--md-heading:#3f5770;--md-marker:#64765f;--md-code:#875235;--md-link:#326b78}
@@ -891,3 +893,35 @@
 .drag-file-hint{display:grid;justify-items:center;gap:6px;padding:26px 34px;border:2px dashed color-mix(in srgb,var(--primary) 45%,var(--border-strong));border-radius:18px;background:var(--surface-elevated);color:var(--primary);box-shadow:var(--shadow-md)}
 .drag-file-hint strong{color:var(--text-primary);font-size:14px}
 .drag-file-hint span{color:var(--text-tertiary);font-size:11px}
+
+
+/* 2026-09-18 第三期：块操作图标在按钮内居中，避免图标中心偏左上 */
+.sheep-milkdown-editor .milkdown-block-handle .operation-item{display:flex;align-items:center;justify-content:center}
+.sheep-milkdown-editor .milkdown-block-handle .operation-item svg{display:block}
+
+/* 2026-09-18 第三期：标题栏新建按钮移到标签左侧，并与右侧箭头合并为一个控件 */
+.titlebar.has-tabs{grid-template-columns:auto minmax(28px,1fr) auto;gap:6px}
+.titlebar-drag{align-self:stretch;min-width:28px;-webkit-app-region:drag}
+/* 只让标签列表自身横向滚动，否则绝对定位的更多操作弹层会被裁掉 */
+.titlebar.has-tabs .titlebar-left{flex:0 1 auto;overflow:visible}
+.titlebar.has-tabs .quick-new{width:28px;padding:0;border-radius:9px 0 0 9px}
+.titlebar.has-tabs .new-draft-group{margin:0 2px 0 0}
+
+.editor-tabs{display:flex;align-items:center;gap:3px;flex:0 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+.editor-tabs::-webkit-scrollbar{display:none}
+.editor-tab{position:relative;display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;max-width:190px;height:26px;padding:0 7px 0 9px;border:1px solid transparent;border-radius:8px;color:var(--text-tertiary);background:transparent;cursor:pointer;font-size:11px;font-weight:600;transition:background .14s ease,color .14s ease,border-color .14s ease}
+.editor-tab:hover{color:var(--text-primary);background:var(--surface-hover)}
+.editor-tab.is-active{color:var(--text-primary);border-color:var(--border);background:var(--surface-elevated);box-shadow:var(--shadow-sm)}
+.editor-tab.is-dragging{opacity:.5}
+/* 拖动落点提示：左右两条竖线 */
+.editor-tab.is-drop-before::before,
+.editor-tab.is-drop-after::after{content:'';position:absolute;top:3px;bottom:3px;width:2px;border-radius:2px;background:var(--primary)}
+.editor-tab.is-drop-before::before{left:-2px}
+.editor-tab.is-drop-after::after{right:-2px}
+.tab-icon{display:inline-flex;flex:0 0 auto;color:currentColor;opacity:.75}
+.editor-tab.is-active .tab-icon{color:var(--primary);opacity:1}
+.tab-title{overflow:hidden;min-width:0;text-overflow:ellipsis;white-space:nowrap}
+.tab-close{display:none;place-items:center;flex:0 0 auto;width:17px;height:17px;padding:0;border:0;border-radius:5px;color:var(--text-tertiary);background:transparent;cursor:pointer;transition:.13s ease}
+.editor-tab:hover .tab-close,.editor-tab.is-active .tab-close{display:grid}
+.editor-tab .tab-close:hover{color:var(--danger);background:var(--danger-soft)}
+@media(max-width:640px){.editor-tab{max-width:124px;padding:0 6px 0 7px}}

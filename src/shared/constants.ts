@@ -1,8 +1,15 @@
 import type { AppSettings, SceneId } from './types'
 
+/**
+ * 旧版默认主题色。饱和度偏高，与软件的暖中性配色不协调，
+ * 仅用于把“从未改过主题色”的用户平滑迁移到新的默认值。
+ */
+export const LEGACY_DEFAULT_THEME_COLOR = '#6958cf'
+
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
-  themeColor: '#6958cf',
+  // 比旧值降低约 13% 饱和度（同色相、同明度），更贴合当前界面的柔和质感
+  themeColor: '#6958bb',
   fontSize: 17,
   autoLaunch: false,
   closeToTray: true,
@@ -25,6 +32,8 @@ export const SCENE_LABELS: Record<SceneId, string> = {
 
 export const HISTORY_PAGE_SIZE = 30
 export const SAVE_DEBOUNCE_MS = 500
+// 单个窗口的标签上限，超出后新建与打开均改为开新窗口
+export const MAX_WINDOW_TABS = 8
 export const WINDOW_MIN_WIDTH = 520
 export const WINDOW_MIN_HEIGHT = 460
 export const WINDOW_DEFAULT_WIDTH = 860

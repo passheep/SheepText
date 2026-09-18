@@ -218,7 +218,10 @@ describe('主进程 IPC（回收仅 mock）', () => {
     const windows = {
       getBrowserWindow: vi.fn(() => ({ webContents: { id: 7, send: vi.fn() }, isDestroyed: () => false })),
       activateWindow: vi.fn(() => true), createWindowForDraft: vi.fn(async () => 'new-window'),
-      switchDraft: vi.fn((_id: string, draftId: string) => { currentId = draftId })
+      switchDraft: vi.fn((_id: string, draftId: string) => { currentId = draftId }),
+      // 多标签：删除文稿时先关闭对应标签，由窗口层负责切换到剩余标签或补空白文稿。
+      closeTab: vi.fn((_id: string, draftId: string) => { if (currentId === draftId) currentId = 'replacement' }),
+      windowTabs: vi.fn(() => [{ draftId: currentId, title: '剩余文稿', displayMode: 'txt' as const, filePath: null }])
     }
     electronMock.handlers.clear()
     electronMock.trashItem.mockReset()
@@ -241,7 +244,7 @@ describe('主进程 IPC（回收仅 mock）', () => {
       expect(f.deleteDraft).not.toHaveBeenCalled()
     })
     await expect(f.invoke('draft:delete', 'draft')).resolves.toMatchObject({ deletedId: 'draft' })
-    expect(f.windows.switchDraft).toHaveBeenCalledWith('window', 'replacement')
+    expect(f.windows.closeTab).toHaveBeenCalledWith('window', 'draft')
     expect(f.deleteDraft).toHaveBeenCalledWith('draft')
   })
 

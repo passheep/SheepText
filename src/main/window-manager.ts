@@ -6,13 +6,15 @@ import {
   DOCK_EXPAND_DELAY,
   DOCK_THRESHOLD,
   DOCK_VISIBLE_SIZE,
+  MAX_WINDOW_TABS,
   WINDOW_DEFAULT_HEIGHT,
   WINDOW_DEFAULT_WIDTH,
   WINDOW_MIN_HEIGHT,
   WINDOW_MIN_WIDTH
 } from '../shared/constants'
-import type { AppSettings, DockSide, WindowInteractionState, WindowRecord } from '../shared/types'
+import type { AppSettings, DockSide, Draft, WindowInteractionState, WindowRecord, WindowTab } from '../shared/types'
 import { DataStore } from './data-store'
+import { draftTabTitle } from '../shared/draft-title'
 
 type WindowRuntime = {
   browserWindow: BrowserWindow
@@ -39,6 +41,8 @@ const IDLE_INTERACTION: WindowInteractionState = {
 
 export class WindowManager {
   private readonly windows = new Map<string, WindowRuntime>()
+  // 正在拖动的标签来源（U08/U09），拖放结束即清空
+  private tabDrag: { windowId: string; draftId: string } | null = null
   private dockTimer: NodeJS.Timeout | null = null
   private quitting = false
   private cascadeIndex = 0
@@ -107,12 +111,13 @@ export class WindowManager {
     normalized.fixedExpanded = false
     normalized.lastActiveAt = Date.now()
     this.store.upsertWindow({ ...normalized, width: preferredWidth, height: preferredHeight })
+    // F16：创建或恢复窗口时确保至少有一个标签，活动文稿以 window_states.draft_id 为准。
+    normalized.draftId = this.ensureWindowTabs(normalized.id, normalized.draftId)
 
     const settings = this.store.getSettings()
     // 渲染页完成 bootstrap 前，系统窗口也使用已保存的文件名；后续由 App 的标题 watcher 同步。
-    const filePath = this.store.getDraft(normalized.draftId)?.filePath
     const browserWindow = new BrowserWindow({
-      title: filePath ? `${basename(filePath)} - SheepText` : 'SheepText',
+      title: this.windowTitleFor(normalized.draftId),
       x: normalized.x ?? undefined,
       y: normalized.y ?? undefined,
       width: normalized.width,
@@ -135,7 +140,10 @@ export class WindowManager {
         preload: join(__dirname, '../preload/index.js'),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true
+        sandbox: true,
+        // 关闭 Chromium 拼写检查：中文写作场景不需要英文词典，
+        // 否则正文里的英文单词会被画上红色波浪线。
+        spellcheck: false
       }
     })
 
@@ -273,7 +281,10 @@ export class WindowManager {
         return
       }
       this.saveWindowBounds(runtime)
-      if (!this.quitting) {
+      // U06：关闭最后一个窗口只是结束可见会话，窗口仍保留为可恢复状态，
+      // 下次启动或托盘重开才能连同标签一起还原；关闭非最后窗口仍按原语义移出工作区。
+      const isLastWindow = this.windows.size === 1
+      if (!this.quitting && !isLastWindow) {
         runtime.record.isOpen = false
         this.store.markWindowClosed(runtime.record.id)
       }
@@ -313,6 +324,12 @@ export class WindowManager {
       this.activateWindow(runtimes[0].record.id)
       return
     }
+    // 托盘重开时同样恢复上次会话的全部窗口与标签，而不是只开一篇文稿。
+    const records = this.store.getRecoveryWindows()
+    if (records.length) {
+      for (const record of records) void this.createWindow(record, false)
+      return
+    }
     const draft = this.store.getMostRecentDraft() ?? this.store.createDraft()
     // 无存活窗口时，优先继承最近关闭窗口的有效几何，避免回退默认尺寸。
     const lastBounds = this.store.getLastClosedWindowBounds()
@@ -341,14 +358,154 @@ export class WindowManager {
     this.activateWindow(runtime.record.id)
   }
 
+  /** 构造窗口标签列表：标题优先用文件名，否则取正文首个非空行摘要。 */
+  windowTabs(windowId: string): WindowTab[] {
+    const tabs: WindowTab[] = []
+    for (const draftId of this.store.listWindowTabs(windowId)) {
+      const draft = this.store.getDraft(draftId)
+      if (!draft) continue
+      tabs.push({
+        draftId: draft.id,
+        title: this.tabTitle(draft),
+        displayMode: draft.displayMode,
+        filePath: draft.filePath
+      })
+    }
+    return tabs
+  }
+
+  /** 新建标签页：创建空白文稿并追加为当前窗口的活动标签。 */
+  newTab(windowId: string): WindowTab[] {
+    const runtime = this.requireRuntime(windowId)
+    const draft = this.store.createDraft()
+    this.store.addWindowTab(windowId, draft.id)
+    runtime.record.draftId = draft.id
+    runtime.record.lastActiveAt = Date.now()
+    this.applyWindowTitle(runtime, draft.id)
+    return this.windowTabs(windowId)
+  }
+
+  /** 在指定窗口把文稿作为新标签打开；窗口不存在或标签已满时返回 false，由调用方改开新窗口。 */
+  openDraftInTab(windowId: string, draftId: string): boolean {
+    if (!this.windows.has(windowId)) return false
+    if (!this.store.listWindowTabs(windowId).includes(draftId) && this.isTabLimitReached(windowId)) return false
+    this.switchDraft(windowId, draftId)
+    return true
+  }
+
+  /** 标签是否已达单窗口上限。 */
+  isTabLimitReached(windowId: string): boolean {
+    return this.store.listWindowTabs(windowId).length >= MAX_WINDOW_TABS
+  }
+
+  /** 关闭标签页；关闭活动标签时切到剩余第一个，标签清空时补一个空白文稿。 */
+  closeTab(windowId: string, draftId: string): void {
+    const runtime = this.requireRuntime(windowId)
+    const wasActive = runtime.record.draftId === draftId
+    this.store.removeWindowTab(windowId, draftId)
+    let remaining = this.store.listWindowTabs(windowId)
+    if (!remaining.length) {
+      const blank = this.store.createDraft()
+      this.store.addWindowTab(windowId, blank.id)
+      remaining = this.store.listWindowTabs(windowId)
+    }
+    if (wasActive || !remaining.includes(runtime.record.draftId)) {
+      this.switchDraft(windowId, remaining[0])
+      return
+    }
+    this.applyWindowTitle(runtime, runtime.record.draftId)
+  }
+
+  /** 切换当前活动标签（复用 switchDraft 的标签补齐与标题同步逻辑）。 */
+  activateTab(windowId: string, draftId: string): void {
+    this.switchDraft(windowId, draftId)
+  }
+
+  /**
+   * U08：把标签从来源窗口移到目标窗口。
+   * 目标窗口已满、来源不含该标签或窗口已不存在时返回 false。
+   * 来源窗口因此没有标签时关闭它；来源窗口活动标签被移走时切到剩余标签。
+   */
+  moveTabBetweenWindows(sourceWindowId: string, targetWindowId: string, draftId: string, position: number | null): boolean {
+    if (sourceWindowId === targetWindowId) return false
+    const source = this.windows.get(sourceWindowId)
+    const target = this.windows.get(targetWindowId)
+    if (!source || !target) return false
+    if (this.isTabLimitReached(targetWindowId)) return false
+    if (!this.store.listWindowTabs(sourceWindowId).includes(draftId)) return false
+    const wasActive = source.record.draftId === draftId
+    this.store.removeWindowTab(sourceWindowId, draftId)
+    this.store.addWindowTab(targetWindowId, draftId)
+    if (position !== null) {
+      // 先追加再按目标位置重排，避免另外维护插入逻辑
+      const order = this.store.listWindowTabs(targetWindowId).filter((id) => id !== draftId)
+      const at = Math.max(0, Math.min(position, order.length))
+      order.splice(at, 0, draftId)
+      this.store.reorderWindowTabs(targetWindowId, order)
+    }
+    this.applyWindowTitle(target, draftId)
+    const remaining = this.store.listWindowTabs(sourceWindowId)
+    if (remaining.length === 0) this.closeWindow(sourceWindowId)
+    else if (wasActive) this.activateTab(sourceWindowId, remaining[0])
+    else this.notifyTabsChanged(sourceWindowId)
+    return true
+  }
+
+  /**
+   * U09：把标签拖出成独立窗口。
+   * 先建好新窗口再摘除来源标签，避免中间态丢文稿；来源窗口被掏空时关闭它。
+   */
+  async detachTabToNewWindow(sourceWindowId: string, draftId: string): Promise<boolean> {
+    const source = this.windows.get(sourceWindowId)
+    if (!source) return false
+    if (!this.store.listWindowTabs(sourceWindowId).includes(draftId)) return false
+    const wasActive = source.record.draftId === draftId
+    await this.createWindowForDraft(draftId)
+    this.store.removeWindowTab(sourceWindowId, draftId)
+    const remaining = this.store.listWindowTabs(sourceWindowId)
+    if (remaining.length === 0) this.closeWindow(sourceWindowId)
+    else if (wasActive) this.activateTab(sourceWindowId, remaining[0])
+    else this.notifyTabsChanged(sourceWindowId)
+    return true
+  }
+
+  /** 标签列表因外部操作变化时，通知该窗口渲染层刷新。 */
+  notifyTabsChanged(windowId: string): void {
+    const runtime = this.windows.get(windowId)
+    if (!runtime || runtime.browserWindow.isDestroyed()) return
+    const draft = this.store.getDraft(runtime.record.draftId)
+    if (!draft) return
+    runtime.browserWindow.webContents.send('window:tabs-changed', { tabs: this.windowTabs(windowId), draft })
+  }
+
+  /** 登记正在拖动的标签来源，供目标窗口落点使用（跨窗口拖放时 dataTransfer 不可靠）。 */
+  beginTabDrag(windowId: string, draftId: string): void {
+    this.tabDrag = { windowId, draftId }
+  }
+
+  endTabDrag(): void {
+    this.tabDrag = null
+  }
+
+  currentTabDrag(): { windowId: string; draftId: string } | null {
+    return this.tabDrag
+  }
+
+  /** 保存标签顺序。 */
+  reorderTabs(windowId: string, orderedDraftIds: string[]): void {
+    this.requireRuntime(windowId)
+    this.store.reorderWindowTabs(windowId, orderedDraftIds)
+  }
+
   switchDraft(windowId: string, draftId: string): void {
     const runtime = this.windows.get(windowId)
     if (!runtime) throw new Error('窗口不存在')
+    // F16：切换目标不在标签中时先补入标签，保证任何入口都不会脱离标签体系。
+    if (!this.store.listWindowTabs(windowId).includes(draftId)) this.store.addWindowTab(windowId, draftId)
     runtime.record.draftId = draftId
     runtime.record.lastActiveAt = Date.now()
     this.store.setWindowDraft(windowId, draftId)
-    const filePath = this.store.getDraft(draftId)?.filePath
-    runtime.browserWindow.setTitle(filePath ? `${basename(filePath)} - SheepText` : 'SheepText')
+    this.applyWindowTitle(runtime, draftId)
   }
 
   closeWindow(windowId: string): void {
@@ -506,6 +663,36 @@ export class WindowManager {
     const runtime = this.windows.get(windowId)
     if (!runtime) throw new Error('窗口不存在')
     return runtime
+  }
+
+  /** 确保窗口至少有一个标签；返回实际活动文稿 id。 */
+  private ensureWindowTabs(windowId: string, activeDraftId: string): string {
+    const tabs = this.store.listWindowTabs(windowId)
+    if (!tabs.length) {
+      const draft = this.store.getDraft(activeDraftId) ?? this.store.createDraft()
+      this.store.addWindowTab(windowId, draft.id)
+      return draft.id
+    }
+    if (!tabs.includes(activeDraftId)) {
+      this.store.setWindowDraft(windowId, tabs[0])
+      return tabs[0]
+    }
+    return activeDraftId
+  }
+
+  /** 标签标题：与渲染层共用 src/shared/draft-title.ts 的规则。 */
+  private tabTitle(draft: Draft): string {
+    return draftTabTitle(draft)
+  }
+
+  /** 窗口标题：文件文稿显示文件名，普通文稿只显示应用名。 */
+  private windowTitleFor(draftId: string): string {
+    const filePath = this.store.getDraft(draftId)?.filePath
+    return filePath ? `${basename(filePath)} - SheepText` : 'SheepText'
+  }
+
+  private applyWindowTitle(runtime: WindowRuntime, draftId: string): void {
+    if (!runtime.browserWindow.isDestroyed()) runtime.browserWindow.setTitle(this.windowTitleFor(draftId))
   }
 
   private normalizeRecordBounds(record: WindowRecord): WindowRecord {

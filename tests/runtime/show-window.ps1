@@ -6,7 +6,7 @@ public class SheepTestWindow {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 }
 "@
-$p = Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+$p = Get-Process electron,SheepText -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
 if (-not $p) { Write-Output 'no-window'; exit 1 }
 [SheepTestWindow]::ShowWindowAsync($p.MainWindowHandle, 9) | Out-Null
 Start-Sleep -Milliseconds 300

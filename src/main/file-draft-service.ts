@@ -12,11 +12,15 @@ type Ports = {
   write: typeof writeTextFileUtf8
   activateWindow: (id: string) => boolean
   createWindow: (draftId: string) => Promise<string>
+  /** 在指定窗口作为新标签打开，窗口不存在或标签已满时返回 false */
+  openTab?: (windowId: string, draftId: string) => boolean
   toast: (draftId: string, payload: ToastPayload) => void
 }
 export type OpenLocalFileResult = {
   opened: boolean; windowId: string; draft: Draft; reused?: boolean
   snapshot?: FileSnapshot | null; convertedFromGbk?: boolean; sourceEncoding?: TextFileContents['sourceEncoding']
+  /** 因当前窗口标签已满而改在新窗口打开 */
+  openedInNewWindow?: boolean
 }
 
 /** 所有打开入口共用全局队列；保存、检测、冲突解决、删除共用每文稿队列。 */
@@ -41,7 +45,8 @@ export class FileDraftService {
     return result
   }
 
-  openLocalFile(filePath: string, cwd?: string): Promise<OpenLocalFileResult> {
+  /** 打开本地文件；传入 targetWindowId 时优先在该窗口作为新标签打开（U07）。 */
+  openLocalFile(filePath: string, cwd?: string, targetWindowId?: string): Promise<OpenLocalFileResult> {
     const result = this.openTail.then(async () => {
       const path = normalizeFilePath(filePath, cwd)
       if (!/\.(txt|md|markdown)$/i.test(path)) throw new Error('仅支持打开 TXT 或 Markdown 文件')
@@ -54,19 +59,28 @@ export class FileDraftService {
         if (opened && this.ports.activateWindow(opened.id)) {
           return { opened: true, windowId: opened.id, draft, reused: true }
         }
-        const windowId = await this.ports.createWindow(draft.id)
-        return { opened: true, windowId, draft }
+        return { opened: true, draft, ...await this.placeDraft(draft.id, targetWindowId) }
       })
       const text = await this.ports.read(path)
       const snapshot = await this.ports.snapshot(path)
       if (!snapshot) throw new Error('文件已不存在')
       const draft = this.store.createFileDraft(path, text.content, displayModeForFile(path))
       this.baselines.set(draft.id, text)
-      const windowId = await this.ports.createWindow(draft.id)
-      return { opened: true, windowId, draft, snapshot, convertedFromGbk: text.convertedFromGbk, sourceEncoding: text.sourceEncoding }
+      return {
+        opened: true, draft, snapshot, convertedFromGbk: text.convertedFromGbk, sourceEncoding: text.sourceEncoding,
+        ...await this.placeDraft(draft.id, targetWindowId)
+      }
     })
     this.openTail = result.then(() => undefined, () => undefined)
     return result
+  }
+
+  /** 优先放入目标窗口的标签栏，标签已满或没有目标窗口时另开新窗口。 */
+  private async placeDraft(draftId: string, targetWindowId?: string): Promise<{ windowId: string; openedInNewWindow: boolean }> {
+    if (targetWindowId && this.ports.openTab?.(targetWindowId, draftId)) {
+      return { windowId: targetWindowId, openedInNewWindow: false }
+    }
+    return { windowId: await this.ports.createWindow(draftId), openedInNewWindow: true }
   }
 
   assertSaveAsTarget(id: string, targetPath: string): void {

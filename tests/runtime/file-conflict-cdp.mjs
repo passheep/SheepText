@@ -31,10 +31,13 @@ async function connect(page) {
     pending.set(requestId, message => { clearTimeout(timer); message.error ? reject(new Error(JSON.stringify(message.error))) : resolve(message.result) })
     ws.send(JSON.stringify({ id: requestId, method, params }))
   })
-  return async expression => {
-    const response = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
-    if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text)
-    return response.result.value
+  return {
+    send,
+    evaluate: async expression => {
+      const response = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
+      if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text)
+      return response.result.value
+    }
   }
 }
 const boot = `window.sheepText.bootstrap(new URLSearchParams(location.search).get('windowId'))`
@@ -45,19 +48,26 @@ function typeText(text) {
 function clickAction(label) {
   return `(()=>{const button=[...document.querySelectorAll('.external-conflict-dialog button')].find(b=>b.textContent.includes(${JSON.stringify(label)})); if(!button)throw new Error('未找到冲突操作按钮'); button.click(); return true})()`
 }
+// U07 起本地文件优先作为当前窗口的新标签：用真实拖放事件打开，
+// 渲染层才会同步标签栏并切到该文稿（直调 openLocalFile 不会更新界面）。
 async function fileWindow(source, path) {
-  const result = await source(`window.sheepText.openLocalFile(${JSON.stringify(path)})`)
-  for (let i = 0; i < 50; i++) {
-    const page = (await pages()).find(p => p.url.includes(result.windowId))
-    if (page) { const evaluate = await connect(page); await wait(500); return evaluate }
-    await wait(100)
-  }
-  throw new Error('文件窗口未就绪')
+  const point = await source.evaluate(`(() => { const r = document.querySelector('.cm-content, .ProseMirror').getBoundingClientRect(); return { x: r.x + 40, y: r.y + 30 } })()`)
+  const data = { items: [], files: [path], dragOperationsMask: 1 }
+  await source.send('Input.dispatchDragEvent', { type: 'dragEnter', ...point, data })
+  await source.send('Input.dispatchDragEvent', { type: 'dragOver', ...point, data })
+  await wait(150)
+  await source.send('Input.dispatchDragEvent', { type: 'drop', ...point, data })
+  await wait(1800)
+  return source.evaluate
 }
 try {
   const source = await connect((await pages())[0])
   const evaluate = await fileWindow(source, file)
-  assert.equal(await evaluate('document.title'), '中文冲突测试.txt - SheepText', '初次打开系统窗口标题')
+  // 标题由主进程按活动文稿设置（另由 tests/runtime/list-windows.ps1 核对系统窗口标题），
+  // 这里验证渲染层可见的文件名标签。
+  const initialTab = await evaluate(`(()=>{const tab=document.querySelector('.editor-tab.is-active');return {title:tab?.querySelector('.tab-title')?.textContent?.trim(),file:tab?.title}})()`)
+  assert.equal(initialTab.title, '中文冲突测试.txt', '初次打开显示文件名标签')
+  assert.ok(initialTab.file?.endsWith('中文冲突测试.txt'), '标签悬浮提示带完整路径')
   // 先改磁盘，再模拟尚未落盘的窗口编辑，立即触发正常自动保存入口。
   await writeFile(file, '外部编辑器版本', 'utf8')
   assert.equal(await evaluate(typeText('窗口尚未保存的新正文')), true)

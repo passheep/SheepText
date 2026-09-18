@@ -32,9 +32,16 @@ try {
   await mkdir(directory, { recursive: true })
   const file = resolve(directory, '界面验收.md')
   await writeFile(file, '# 首标题\n\n1. 序号第一行\n2. 序号第二行\n\n- 圆点第一行\n\n' + Array.from({ length: 40 }, (_, i) => `## 标题${i}\n\n正文${i}\n\n`).join(''))
-  const opened = await root.evaluate(`window.sheepText.openLocalFile(${JSON.stringify(file)})`)
-  await wait(900)
-  const page = (await pages()).find(p => p.url.includes(opened.windowId))
+  // U07 起本地文件优先作为当前窗口的新标签，因此用真实拖放事件打开，
+  // 才能让渲染层同步标签栏并切到该文稿（直调 openLocalFile 不会更新界面）。
+  const dropPoint = await root.evaluate(`(() => { const r = document.querySelector('.cm-content, .ProseMirror').getBoundingClientRect(); return { x: r.x + 40, y: r.y + 30 } })()`)
+  const dropData = { items: [], files: [file], dragOperationsMask: 1 }
+  await root.send('Input.dispatchDragEvent', { type: 'dragEnter', ...dropPoint, data: dropData })
+  await root.send('Input.dispatchDragEvent', { type: 'dragOver', ...dropPoint, data: dropData })
+  await wait(150)
+  await root.send('Input.dispatchDragEvent', { type: 'drop', ...dropPoint, data: dropData })
+  await wait(1800)
+  const page = (await pages())[0]
   const { send, evaluate } = await connect(page)
   await send('Page.bringToFront')
   assert.equal(await evaluate(`Boolean(document.querySelector('.floating-command-right'))`), false, '未设默认模型时场景区也隐藏')

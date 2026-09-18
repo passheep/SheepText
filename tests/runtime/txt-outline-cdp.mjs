@@ -1,7 +1,8 @@
 // 验证 TXT 侧粘贴清除格式与 Markdown 大纲导航（真实 Electron 实例）。
 // 隐藏窗口会节流定时器，因此注入函数内部只用固定等待（约 20 秒总量），
 // 外部仅轮询一次写入的结果对象，不做任何 Promise 竞速。
-const [page] = await (await fetch('http://localhost:9333/json/list')).json()
+const port = process.env.SHEEPTEXT_CDP_PORT || '9333'
+const [page] = await (await fetch(`http://localhost:${port}/json/list`)).json()
 if (!page) { console.error('未找到调试页面'); process.exit(1) }
 const ws = new WebSocket(page.webSocketDebuggerUrl)
 await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject })

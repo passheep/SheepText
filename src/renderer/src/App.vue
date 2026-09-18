@@ -8,7 +8,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { HISTORY_PAGE_SIZE, SAVE_DEBOUNCE_MS, SCENE_LABELS } from '../../shared/constants'
 import type {
   AiRequest, AiResult, AppSettings, Draft, DraftSaveInput, DraftSummary, EnhanceMode, ModelConfigPublic,
-  DockSide, SceneId, ToastPayload, WindowBootstrap, WindowInteractionState
+  DockSide, SceneId, TabDropResult, ToastPayload, WindowBootstrap, WindowInteractionState, WindowTab, WindowTabsResult
 } from '../../shared/types'
 import AiResultPanel from './components/AiResultPanel.vue'
 import type { SelectOption } from './components/BaseSelect.vue'
@@ -16,7 +16,9 @@ import BaseButton from './components/BaseButton.vue'
 import HistoryDrawer from './components/HistoryDrawer.vue'
 import IconButton from './components/IconButton.vue'
 import MilkdownEditor from './components/MilkdownEditor.vue'
+import { draftTabTitle } from '../../shared/draft-title'
 import SettingsPanel from './components/SettingsPanel.vue'
+import TabBar from './components/TabBar.vue'
 import TextEditor from './components/TextEditor.vue'
 import appIcon from './assets/app-icon.png'
 
@@ -195,9 +197,12 @@ const booting = ref(true)
 const draft = ref<Draft | null>(null)
 const settings = ref<AppSettings | null>(null)
 const models = ref<ModelConfigPublic[]>([])
-const appVersion = ref('0.3.0')
+const appVersion = ref('0.4.1')
 const encryptionAvailable = ref(true)
 const editor = ref<EditorExpose | null>(null)
+const tabBar = ref<{ revealActive: () => Promise<void> } | null>(null)
+// 当前窗口的标签页；主进程只同步列表与活动文稿，未保存内容由渲染层负责
+const tabs = ref<WindowTab[]>([])
 const editorFocused = ref(false)
 const outlineHeld = ref(false)
 const isComposing = ref(false)
@@ -259,7 +264,7 @@ const currentEditorKind = computed<'text' | 'milkdown'>(() =>
 )
 const themeAttribute = computed(() => settings.value?.theme ?? 'system')
 const themeStyle = computed(() => {
-  const color = settings.value?.themeColor ?? '#6958cf'
+  const color = settings.value?.themeColor ?? '#6958bb'
   return {
     '--primary': color,
     '--primary-strong': color,
@@ -336,6 +341,16 @@ async function handleFileDrop(event: DragEvent): Promise<void> {
     try {
       const result = await window.sheepText.openLocalFile(path)
       if (result.convertedFromGbk) showToast({ type: 'info', message: '文件原为 GBK 编码，已按 UTF-8 打开，保存时将转换' })
+      // U07：拖入文件优先在当前窗口作为新标签；标签已满时主进程会开新窗口。
+      if (result.openedInNewWindow === false) {
+        const state = await window.sheepText.windowTabs(windowId)
+        tabs.value = state.tabs
+        setCurrentDraft(state.draft)
+        await nextTick()
+        await tabBar.value?.revealActive()
+      } else {
+        showToast({ type: 'info', message: '当前窗口标签已满，已在新窗口打开文件' })
+      }
     } catch (error) {
       showToast({ type: 'error', message: cleanError(error) })
     }
@@ -383,10 +398,19 @@ onBeforeUnmount(() => {
 
 watch(() => [draft.value?.id, draft.value?.displayMode], hidePasteNotice)
 watch(interactionState, (state) => window.sheepText.setInteractionState(windowId, state), { deep: true })
-// 首次加载和切换文稿都同步系统窗口标题。
-watch(() => draft.value?.filePath, (filePath) => {
-  document.title = filePath ? filePath.split(/[\\/]/).pop() + ' - SheepText' : 'SheepText'
-}, { immediate: true })
+// 普通文稿的标签标题取正文首行，编辑时同步刷新，避免标签长期停在“空白文稿”。
+// 标题规则与主进程共用 draftTabTitle，保证下次标签操作时两边结果一致。
+watch(() => draft.value?.content, (content) => {
+  const current = draft.value
+  if (!current || current.filePath) return
+  const index = tabs.value.findIndex((tab) => tab.draftId === current.id)
+  if (index < 0) return
+  const title = draftTabTitle({ filePath: null, content: content ?? '' })
+  if (tabs.value[index].title !== title) {
+    tabs.value = tabs.value.map((tab, i) => (i === index ? { ...tab, title } : tab))
+  }
+})
+
 watch(historyOpen, (open) => {
   if (open) void loadHistory(true)
 })
@@ -396,6 +420,7 @@ watch(historySearch, () => {
 
 function applyBootstrap(bootstrap: WindowBootstrap): void {
   draft.value = bootstrap.draft
+  tabs.value = bootstrap.tabs ?? []
   settings.value = bootstrap.settings
   models.value = bootstrap.models
   appVersion.value = bootstrap.appVersion
@@ -426,13 +451,18 @@ function registerEvents(): void {
       isCollapsed.value = value.isCollapsed
     }),
     window.sheepText.onToast(showToast),
+    // U08：其他窗口移走/移入标签后同步本窗口标签栏
+    window.sheepText.onTabsChanged((state) => {
+      tabs.value = state.tabs
+      if (draft.value?.id !== state.draft.id) setCurrentDraft(state.draft)
+    }),
     window.sheepText.onRequestClose(() => void requestClose()),
     window.sheepText.onBeforeQuit(() => void flushBeforeQuit())
   )
 }
 
 function applyTheme(): void {
-  const color = settings.value?.themeColor ?? '#6958cf'
+  const color = settings.value?.themeColor ?? '#6958bb'
   document.documentElement.dataset.theme = settings.value?.theme ?? 'system'
   document.documentElement.style.setProperty('--primary', color)
   document.documentElement.style.setProperty('--primary-strong', color)
@@ -551,16 +581,139 @@ async function createDraft(): Promise<void> {
   newMenuOpen.value = false
   if (!await flushSave()) return
   try {
-    const created = await window.sheepText.createDraft(windowId)
-    setCurrentDraft(created)
+    const result = await window.sheepText.newTab(windowId)
+    // U05：标签已达上限时主进程改为开新窗口，当前窗口保持原样
+    if (result.openedInNewWindow) {
+      showToast({ type: 'info', message: '当前窗口已有 8 个标签，已在新窗口新建文稿' })
+      return
+    }
+    tabs.value = result.tabs
+    setCurrentDraft(result.draft)
     closeHistory()
     closeAiPanel()
     await nextTick()
+    await tabBar.value?.revealActive()
     editor.value?.focus()
-    showToast({ type: 'success', message: '已新建空白文稿，原文稿保留在历史中' })
+    showToast({ type: 'success', message: '已新建标签页，原文稿保留在历史中' })
   } catch (error) {
     showToast({ type: 'error', message: cleanError(error) })
   }
+}
+
+// 主进程只同步标签列表与活动文稿；当前文稿的未保存内容仍由渲染层掌握
+function applyTabs(result: WindowTabsResult): void {
+  tabs.value = result.tabs
+  if (draft.value?.id !== result.draft.id) setCurrentDraft(result.draft)
+}
+
+async function switchTab(draftId: string): Promise<void> {
+  if (!draft.value || draftId === draft.value.id) return
+  if (!await flushSave()) return
+  try {
+    applyTabs(await window.sheepText.activateTab(windowId, draftId))
+    closeAiPanel()
+    await nextTick()
+    await tabBar.value?.revealActive()
+    editor.value?.focus()
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  }
+}
+
+async function closeTab(draftId: string): Promise<void> {
+  // 关闭当前标签前先保存，避免未落库内容丢失
+  if (draft.value?.id === draftId && !await flushSave()) return
+  try {
+    applyTabs(await window.sheepText.closeTab(windowId, draftId))
+    closeAiPanel()
+    await nextTick()
+    await tabBar.value?.revealActive()
+    editor.value?.focus()
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  }
+}
+
+async function reorderTabs(orderedDraftIds: string[]): Promise<void> {
+  try {
+    tabs.value = await window.sheepText.reorderTabs(windowId, orderedDraftIds)
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  }
+}
+
+// ---------- U08/U09：跨窗口拖动标签与拖出成新窗口 ----------
+const TAB_DRAG_TYPE = 'application/x-sheeptext-tab'
+
+function isTabDrag(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes(TAB_DRAG_TYPE)
+}
+
+function beginTabDrag(draftId: string): void {
+  void window.sheepText.beginTabDrag(windowId, draftId)
+}
+
+/** 落点结果同步：移入的标签会成为本窗口活动标签。 */
+function applyTabDrop(result: TabDropResult): void {
+  if (!result.moved) {
+    showToast({ type: 'info', message: '目标窗口已有 8 个标签，无法移入该标签' })
+    return
+  }
+  if (result.tabs && result.draft) {
+    tabs.value = result.tabs
+    if (draft.value?.id !== result.draft.id) setCurrentDraft(result.draft)
+  }
+}
+
+async function handleTabDragEnd(dropped: boolean, screenX: number, screenY: number): Promise<void> {
+  // 落在其他窗口时由对方 drop 处理；落在本窗口内则是普通排序。
+  if (dropped) return
+  // 指针仍在窗口矩形内：视为取消拖动（例如按 Esc），只清理登记。
+  const insideWindow = screenX >= window.screenX && screenX <= window.screenX + window.outerWidth
+    && screenY >= window.screenY && screenY <= window.screenY + window.outerHeight
+  if (insideWindow) {
+    void window.sheepText.endTabDrag(windowId)
+    return
+  }
+  try {
+    const result = await window.sheepText.detachTab(windowId)
+    if (result.detached) showToast({ type: 'success', message: '已把该标签拖出为新窗口' })
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  }
+}
+
+/** 拖到窗口正文区域（非标签栏）：追加到标签末尾。 */
+function onWorkspaceDragOver(event: DragEvent): void {
+  if (!isTabDrag(event)) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+async function onWorkspaceDrop(event: DragEvent): Promise<void> {
+  if (!isTabDrag(event)) return
+  event.preventDefault()
+  try {
+    applyTabDrop(await window.sheepText.dropTab(windowId, null))
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  }
+}
+
+/** 拖到标签栏：按落点位置插入。 */
+async function onTabCrossDrop(position: number | null): Promise<void> {
+  try {
+    applyTabDrop(await window.sheepText.dropTab(windowId, position))
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  }
+}
+
+async function cycleTab(direction: number): Promise<void> {
+  if (!draft.value || tabs.value.length < 2) return
+  const index = tabs.value.findIndex((tab) => tab.draftId === draft.value?.id)
+  if (index < 0) return
+  await switchTab(tabs.value[(index + direction + tabs.value.length) % tabs.value.length].draftId)
 }
 
 async function createWindow(): Promise<void> {
@@ -580,9 +733,20 @@ async function importFile(): Promise<void> {
   try {
     const result = await window.sheepText.importFile()
     if (result.canceled || !result.draft) return
-    if (!result.openedInNewWindow) setCurrentDraft(result.draft)
     closeHistory()
-    showToast({ type: 'success', message: '已在独立窗口打开本地文件，编辑后自动同步保存' })
+    if (result.openedInNewWindow) {
+      showToast({ type: 'success', message: '已在新窗口打开本地文件，编辑后自动同步保存' })
+      return
+    }
+    // U07：菜单打开的文件同样优先作为当前窗口的新标签
+    const state = await window.sheepText.windowTabs(windowId)
+    tabs.value = state.tabs
+    setCurrentDraft(state.draft)
+    closeAiPanel()
+    await nextTick()
+    await tabBar.value?.revealActive()
+    editor.value?.focus()
+    showToast({ type: 'success', message: '已作为新标签打开本地文件，编辑后自动同步保存' })
   } catch (error) {
     showToast({ type: 'error', message: '打开文件失败：' + cleanError(error) })
   }
@@ -604,6 +768,22 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
     else void createDraft()
     return
   }
+  // 标签页快捷键：新建、关闭、循环切换
+  if (key === 't' && !event.shiftKey) {
+    event.preventDefault()
+    void createDraft()
+    return
+  }
+  if (key === 'w' && !event.shiftKey) {
+    event.preventDefault()
+    if (draft.value) void closeTab(draft.value.id)
+    return
+  }
+  if (key === 'tab') {
+    event.preventDefault()
+    void cycleTab(event.shiftKey ? -1 : 1)
+    return
+  }
   if (key === 'f' && !event.shiftKey) {
     event.preventDefault()
     if (settingsOpen.value) return
@@ -621,6 +801,12 @@ async function selectHistory(id: string): Promise<void> {
     editor.value?.focus()
     return
   }
+  // 已在当前窗口标签中则直接切换，不再请求打开
+  if (tabs.value.some((tab) => tab.draftId === id)) {
+    closeHistory()
+    await switchTab(id)
+    return
+  }
   if (!await flushSave()) return
   try {
     const result = await window.sheepText.openDraft(windowId, id)
@@ -628,11 +814,17 @@ async function selectHistory(id: string): Promise<void> {
       showToast({ type: 'info', message: '该文稿已在另一个窗口中打开' })
       return
     }
+    if (result.tabs) tabs.value = result.tabs
+    if (result.openedInNewWindow) {
+      showToast({ type: 'info', message: '当前窗口标签已满，已在新窗口打开该文稿' })
+      return
+    }
     if (result.draft) {
       setCurrentDraft(result.draft)
       closeHistory()
       closeAiPanel()
       await nextTick()
+      await tabBar.value?.revealActive()
       editor.value?.focus()
     }
   } catch (error) {
@@ -647,8 +839,6 @@ function setCurrentDraft(value: Draft): void {
   saveError.value = ''
   externalConflict.value = null
   Object.assign(selection, { from: 0, to: 0, text: '' })
-  // F19：文件文稿同步窗口标题为文件名
-  document.title = value.filePath ? value.filePath.split(/[\\/]/).pop() + ' - SheepText' : 'SheepText'
 }
 
 async function loadHistory(reset: boolean): Promise<void> {
@@ -728,10 +918,14 @@ async function deleteHistory(id: string): Promise<void> {
   try {
     const result = await window.sheepText.deleteDraft(windowId, id)
     historyItems.value = historyItems.value.filter((item) => item.id !== id)
+    // 被删文稿可能正占着一个标签，用主进程返回的最新标签列表同步
+    if (result.tabs) tabs.value = result.tabs
+    else tabs.value = tabs.value.filter((tab) => tab.draftId !== id)
     if (result.replacementDraft) {
       setCurrentDraft(result.replacementDraft)
       closeAiPanel()
       await nextTick()
+      await tabBar.value?.revealActive()
       editor.value?.focus()
     }
     showToast({ type: 'success', message: '文稿已删除' })
@@ -957,7 +1151,7 @@ function cleanError(error: unknown): string {
 </script>
 
 <template>
-  <div class="app-root" :data-theme="themeAttribute" :style="themeStyle" :class="{ 'is-docked': isDocked, 'is-collapsed': isCollapsed }">
+  <div class="app-root" :data-theme="themeAttribute" :style="themeStyle" :class="{ 'is-docked': isDocked, 'is-collapsed': isCollapsed }" @dragover="onWorkspaceDragOver" @drop="onWorkspaceDrop">
     <button v-if="isCollapsed" type="button" class="dock-rail no-drag" :class="`dock-${dockSide ?? 'left'}`" title="展开 SheepText" aria-label="展开 SheepText" @click="expandDockRail" />
 
     <div v-if="booting" class="boot-screen">
@@ -967,32 +1161,39 @@ function cleanError(error: unknown): string {
     </div>
 
     <template v-else-if="draft && settings">
-      <header class="titlebar">
+      <header class="titlebar has-tabs">
         <div class="titlebar-left">
           <div class="history-trigger no-drag" @mouseenter="onHistoryTriggerEnter" @mouseleave="onHistoryTriggerLeave">
             <IconButton title="文稿历史" :active="historyOpen" @click="toggleHistoryByClick"><History :size="18" /></IconButton>
           </div>
+          <span v-if="isDocked" class="dock-chip">已停靠</span>
           <div class="new-draft-group no-drag" @mouseleave="scheduleNewMenuClose">
-            <button class="quick-new" type="button" title="新建文稿" @click="createDraft"><Plus :size="16" /><span>新建</span></button>
+            <button class="quick-new" type="button" title="新建标签页（Ctrl + T）" @click="createDraft"><Plus :size="16" /></button>
             <button class="quick-new-menu" type="button" title="更多新建方式" @mouseenter="openNewMenu" @focus="newMenuOpen = true" @click="newMenuOpen = !newMenuOpen"><ChevronDown :size="14" /></button>
             <Transition name="popover">
               <div v-if="newMenuOpen" class="new-menu">
-                <button type="button" @click="createDraft"><FilePlus2 :size="17" /><span><strong>新建文稿</strong><small>在当前窗口打开空白草稿</small></span></button>
+                <button type="button" @click="createDraft"><FilePlus2 :size="17" /><span><strong>新建标签页</strong><small>在当前窗口打开空白草稿</small></span></button>
                 <button type="button" @click="createWindow"><PanelTop :size="17" /><span><strong>新建窗口</strong><small>独立编辑另一份内容</small></span></button>
-                <button type="button" @click="importFile"><FolderOpen :size="17" /><span><strong>从文件中打开</strong><small>在新窗口编辑本地 TXT / MD 文件</small></span></button>
+                <button type="button" @click="importFile"><FolderOpen :size="17" /><span><strong>从文件中打开</strong><small>作为新标签打开本地 TXT / MD 文件</small></span></button>
                 <button type="button" @click="saveAs"><FileDown :size="17" /><span><strong>另存为</strong><small>导出当前文稿到文件</small></span></button>
                 <button type="button" @click="copyDraft"><Copy :size="17" /><span><strong>复制全文</strong><small>复制当前文稿内容</small></span></button>
               </div>
             </Transition>
           </div>
+          <TabBar
+            ref="tabBar"
+            :tabs="tabs"
+            :active-draft-id="draft.id"
+            @select="switchTab"
+            @close="closeTab"
+            @reorder="reorderTabs"
+            @drag-start="beginTabDrag"
+            @drag-end="handleTabDragEnd"
+            @cross-drop="onTabCrossDrop"
+          />
         </div>
 
-        <div class="window-brand">
-          <img class="brand-logo" :src="appIcon" alt="SheepText" />
-          <!-- F19：文件文稿标题区显示文件名，普通文稿保持品牌名 -->
-          <span class="brand-name" :title="draft.filePath ?? ''">{{ draft.filePath ? draft.filePath.replace(/^[\\/]+/, '').split(/[\\/]/).pop() : 'SheepText' }}</span>
-          <span v-if="isDocked" class="dock-chip">已停靠</span>
-        </div>
+        <div class="titlebar-drag" />
 
         <div class="titlebar-actions">
           <IconButton title="始终置顶" :active="alwaysOnTop" @click="toggleAlwaysOnTop"><Pin :size="17" /></IconButton>
