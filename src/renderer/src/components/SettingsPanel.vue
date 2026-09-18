@@ -4,7 +4,7 @@ import {
   KeyRound, MonitorCog, Palette, Plus, RotateCcw, Save, ShieldCheck, SlidersHorizontal,
   Sparkles, Trash2, X
 } from '@lucide/vue'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { AppSettings, ModelConfigInput, ModelConfigPublic, StorageInfo, ToastPayload } from '../../../shared/types'
 import BaseButton from './BaseButton.vue'
 import BaseSelect, { type SelectOption } from './BaseSelect.vue'
@@ -80,6 +80,38 @@ const sceneOptions: SelectOption[] = [
   { value: 'coding', label: '编程', description: '需求、错误描述与代码任务' },
   { value: 'image', label: '生图', description: '主体、构图、光线与风格' }
 ]
+
+// 本机字体列表：通过 Local Font Access 读取，失败时只保留“默认字体”
+const systemFonts = ref<string[]>([])
+const editorFontOptions = computed<SelectOption[]>(() => [
+  { value: '', label: '默认字体', description: '跟随内置字体栈' },
+  ...systemFonts.value.map((family) => ({ value: family, label: family }))
+])
+const fontPreviewText = '示例文字：随手写，安心改。SheepText 0123'
+const previewFontFamily = computed(() => {
+  const family = settingsDraft.editorFont.trim().replace(/['"\\]/g, '')
+  return family ? `'${family}', var(--font-editor-default)` : 'var(--font-editor-default)'
+})
+
+async function loadSystemFonts(): Promise<void> {
+  if (systemFonts.value.length) return
+  const query = (window as unknown as { queryLocalFonts?: () => Promise<Array<{ family: string }>> }).queryLocalFonts
+  if (typeof query !== 'function') return
+  try {
+    const fonts = await query()
+    systemFonts.value = [...new Set(fonts.map((font) => font.family))].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  } catch {
+    // 窗口被遮挡时拿不到字体列表，等页面重新可见时再试一次
+  }
+}
+
+// 窗口被遮挡时 Local Font Access 会报“Page needs to be visible”，重新可见后补加载一次
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible' && props.open) void loadSystemFonts()
+}
+
+onMounted(() => document.addEventListener('visibilitychange', onVisibilityChange))
+onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisibilityChange))
 const providerOptions: SelectOption[] = [
   { value: 'deepseek', label: 'DeepSeek' }, { value: 'openai', label: 'OpenAI' },
   { value: 'openai-compatible', label: 'OpenAI 兼容服务' }
@@ -112,6 +144,8 @@ function setActiveTab(tab: SettingsTab): void {
     else newModel()
   }
   if (tab === 'storage') void loadStorageInfo()
+  // 字体列表仅在进入外观页时读取一次，避免无谓开销
+  if (tab === 'general') void loadSystemFonts()
 }
 
 function selectModel(id: string): void {
@@ -284,6 +318,17 @@ function cleanError(error: unknown): string {
                     <label class="field-block"><span>编辑字号</span><div class="range-field"><input v-model.number="settingsDraft.fontSize" type="range" min="13" max="26" /><strong>{{ settingsDraft.fontSize }} px</strong></div></label>
                     <label class="field-block"><span>编辑背景</span><BaseSelect v-model="settingsDraft.editorBackground" :options="editorBackgroundOptions" /></label>
                     <label class="field-block"><span>背景纹理</span><BaseSelect v-model="settingsDraft.editorPattern" :options="editorPatternOptions" /></label>
+                    <div class="field-block full">
+                      <span>编辑器字体<small>从本机已安装字体中选择，默认跟随内置字体栈</small></span>
+                      <BaseSelect
+                        v-model="settingsDraft.editorFont"
+                        :options="editorFontOptions"
+                        searchable
+                        search-placeholder="搜索本机字体"
+                        placeholder="默认字体"
+                      />
+                      <p class="font-preview" :style="{ fontFamily: previewFontFamily }">{{ fontPreviewText }}</p>
+                    </div>
                     <div class="field-block full"><span>主题色</span><div class="theme-color-picker">
                       <button v-for="color in themeColorPresets" :key="color.value" type="button" class="theme-swatch" :class="{ active: settingsDraft.themeColor === color.value }" :title="color.label" :style="{ backgroundColor: color.value }" @click="settingsDraft.themeColor = color.value" />
                       <label class="custom-color-swatch" title="自定义主题色"><input v-model="settingsDraft.themeColor" type="color" /><span>自定义</span></label><code>{{ settingsDraft.themeColor }}</code>

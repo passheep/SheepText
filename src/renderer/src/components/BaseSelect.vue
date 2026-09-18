@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Check, ChevronDown } from '@lucide/vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 export type SelectOption = {
   value: string
@@ -16,10 +16,15 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   compact?: boolean
   disabled?: boolean
+  /** 选项较多时（如系统字体列表）开启搜索过滤 */
+  searchable?: boolean
+  searchPlaceholder?: string
 }>(), {
   placeholder: '请选择',
   compact: false,
-  disabled: false
+  disabled: false,
+  searchable: false,
+  searchPlaceholder: '输入关键字筛选'
 })
 
 const emit = defineEmits<{
@@ -32,10 +37,29 @@ const popover = ref<HTMLElement | null>(null)
 const open = ref(false)
 const opensUp = ref(false)
 const selected = computed(() => props.options.find((option) => option.value === props.modelValue))
+const keyword = ref('')
+const filteredOptions = computed(() => {
+  if (!props.searchable) return props.options
+  const needle = keyword.value.trim().toLowerCase()
+  if (!needle) return props.options
+  return props.options.filter((option) =>
+    option.label.toLowerCase().includes(needle) || option.value.toLowerCase().includes(needle)
+  )
+})
+const searchInput = ref<HTMLInputElement | null>(null)
+
+function onSearchKeydown(event: KeyboardEvent): void {
+  // 回车选中当前唯一可见项，方便键盘快速确认
+  if (event.key === 'Enter' && filteredOptions.value.length === 1) {
+    event.preventDefault()
+    select(filteredOptions.value[0])
+  }
+}
 
 function closePopover(): void {
   open.value = false
   opensUp.value = false
+  keyword.value = ''
   emit('open', false)
 }
 
@@ -94,6 +118,13 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
+// 开启搜索时，弹出后自动聚焦筛选框
+watch(open, async (value) => {
+  if (!value || !props.searchable) return
+  await nextTick()
+  searchInput.value?.focus()
+})
+
 onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerDown)
   document.addEventListener('keydown', onKeydown)
@@ -121,8 +152,18 @@ onBeforeUnmount(() => {
     </button>
     <Transition name="popover">
       <div v-if="open" ref="popover" class="select-popover" role="listbox">
+        <div v-if="searchable" class="select-search">
+          <input
+            ref="searchInput"
+            v-model="keyword"
+            type="text"
+            :placeholder="searchPlaceholder"
+            spellcheck="false"
+            @keydown="onSearchKeydown"
+          >
+        </div>
         <button
-          v-for="option in options"
+          v-for="option in filteredOptions"
           :key="option.value"
           type="button"
           class="select-option"
@@ -138,6 +179,7 @@ onBeforeUnmount(() => {
           </span>
           <Check v-if="option.value === modelValue" :size="16" />
         </button>
+        <p v-if="searchable && !filteredOptions.length" class="select-empty">没有匹配的选项</p>
         <slot name="footer" />
       </div>
     </Transition>

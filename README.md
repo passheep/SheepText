@@ -2,7 +2,7 @@
 
 SheepText 是一款面向日常 AI 使用场景的 Windows 桌面文本工作台。以轻量编辑为核心，提供 AI 文本增强、即时呈现 Markdown、多标签与多窗口、本地文件编辑、历史检索、贴边收起和托盘驻留等能力。
 
-当前版本：`0.4.1`
+当前版本：`0.4.2`
 
 ![SheepText 主界面](screenshots/main-window.png)
 

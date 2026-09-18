@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { basename, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { safeStorage } from 'electron'
-import { DEFAULT_SETTINGS, LEGACY_DEFAULT_THEME_COLOR } from '../shared/constants'
+import { DEFAULT_SETTINGS, LEGACY_DEFAULT_EDITOR_PATTERN, LEGACY_DEFAULT_THEME_COLOR } from '../shared/constants'
 import { normalizeFilePath } from './file-drafts'
 import type {
   AppSettings, ApiProtocol, DisplayMode, Draft, DraftSaveInput, DraftSummary,
@@ -246,8 +246,13 @@ export class DataStore {
         : 'auto',
       editorPattern: merged.editorPattern === 'grid-large' || merged.editorPattern === 'grid-small'
         || merged.editorPattern === 'lines' || merged.editorPattern === 'waves'
-        ? merged.editorPattern
-        : 'none'
+        // 仍停留在旧默认纹理的用户跟随新默认值“无纹理”；其余选择一律保留。
+        ? (merged.editorPattern === LEGACY_DEFAULT_EDITOR_PATTERN ? DEFAULT_SETTINGS.editorPattern : merged.editorPattern)
+        : 'none',
+      // 字体族名限长，避免异常值撑坏样式
+      editorFont: typeof merged.editorFont === 'string' && merged.editorFont.trim().length > 0
+        ? merged.editorFont.trim().slice(0, 120)
+        : ''
     }
   }
 

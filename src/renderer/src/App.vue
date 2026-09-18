@@ -197,7 +197,7 @@ const booting = ref(true)
 const draft = ref<Draft | null>(null)
 const settings = ref<AppSettings | null>(null)
 const models = ref<ModelConfigPublic[]>([])
-const appVersion = ref('0.4.1')
+const appVersion = ref('0.4.2')
 const encryptionAvailable = ref(true)
 const editor = ref<EditorExpose | null>(null)
 const tabBar = ref<{ revealActive: () => Promise<void> } | null>(null)
@@ -464,11 +464,16 @@ function registerEvents(): void {
 function applyTheme(): void {
   const color = settings.value?.themeColor ?? '#6958bb'
   document.documentElement.dataset.theme = settings.value?.theme ?? 'system'
+  // 编辑器字体：留空则沿用内置字体栈，否则把用户选的字体放在最前面
+  const family = (settings.value?.editorFont ?? '').trim().replace(/['"\\]/g, '')
+  const editorFont = family ? `'${family}', var(--font-editor-default)` : 'var(--font-editor-default)'
+  document.documentElement.style.setProperty('--font-editor', editorFont)
   document.documentElement.style.setProperty('--primary', color)
   document.documentElement.style.setProperty('--primary-strong', color)
   document.documentElement.style.setProperty('--primary-soft', 'color-mix(in srgb, ' + color + ' 14%, transparent)')
   document.documentElement.style.setProperty('--selection', 'color-mix(in srgb, ' + color + ' 22%, transparent)')
   const root = document.querySelector<HTMLElement>('.app-root')
+  root?.style.setProperty('--font-editor', editorFont)
   root?.style.setProperty('--primary', color)
   root?.style.setProperty('--primary-strong', color)
   root?.style.setProperty('--primary-soft', 'color-mix(in srgb, ' + color + ' 14%, transparent)')
@@ -504,7 +509,8 @@ function createSettingsSnapshot(source: AppSettings): AppSettings {
     defaultModelConfigId: source.defaultModelConfigId ? String(source.defaultModelConfigId) : null,
     defaultDisplayMode: source.defaultDisplayMode,
     editorBackground: source.editorBackground,
-    editorPattern: source.editorPattern
+    editorPattern: source.editorPattern,
+    editorFont: String(source.editorFont ?? '')
   }
 }
 

@@ -93,6 +93,8 @@ export interface AppSettings {
   defaultDisplayMode: DisplayMode
   editorBackground: EditorBackground
   editorPattern: EditorPattern
+  /** 编辑器字体族；空字符串表示使用内置默认字体栈。 */
+  editorFont: string
 }
 
 export interface WindowRecord {

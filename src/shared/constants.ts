@@ -6,6 +6,9 @@ import type { AppSettings, SceneId } from './types'
  */
 export const LEGACY_DEFAULT_THEME_COLOR = '#6958cf'
 
+/** 旧版默认背景纹理；仅用于把从未改过该选项的用户迁到新的默认值“无纹理”。 */
+export const LEGACY_DEFAULT_EDITOR_PATTERN = 'grid-large'
+
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   // 比旧值降低约 13% 饱和度（同色相、同明度），更贴合当前界面的柔和质感
@@ -21,7 +24,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultModelConfigId: null,
   defaultDisplayMode: 'txt',
   editorBackground: 'auto',
-  editorPattern: 'grid-large'
+  // 默认不铺纹理，保持干净底色；需要时可到设置里换成方格、横线等
+  editorPattern: 'none',
+  // 空字符串表示沿用内置字体栈，用户可在设置里换成自己电脑中的字体
+  editorFont: ''
 }
 
 export const SCENE_LABELS: Record<SceneId, string> = {

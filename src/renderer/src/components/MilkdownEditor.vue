@@ -71,6 +71,8 @@ let outlineCloseTimer: ReturnType<typeof setTimeout> | null = null
 // 只记录当前文档的最近一次粘贴；后续正文事务立即使旧范围失效。
 let lastPasteRange: { from: number; to: number; doc: ProseMirrorNode } | null = null
 let pendingPaste: { from: number; to: number } | null = null
+// 粘贴事件到粘贴事务之间的容差；超过该时长未产生事务就丢弃，避免误认到后续输入上
+const PASTE_PENDING_TTL_MS = 600
 
 let crepe: Crepe | null = null
 let editorView: EditorView | null = null
@@ -345,7 +347,9 @@ function onPasteCapture(event: ClipboardEvent): void {
   if ((event.target as Element)?.closest('.cm-editor') || Array.from(data.items).some((item) => item.kind === 'file')) return
   const snapshot = { from: editorView.state.selection.from, to: editorView.state.selection.to }
   pendingPaste = snapshot
-  queueMicrotask(() => { if (pendingPaste === snapshot) pendingPaste = null })
+  // 粘贴事务可能比 paste 事件晚几毫秒到达，不能用微任务立即清理，
+  // 否则 appendTransaction 取不到范围，底部「保留原格式 / 清除格式」提示就不会出现。
+  window.setTimeout(() => { if (pendingPaste === snapshot) pendingPaste = null }, PASTE_PENDING_TTL_MS)
 }
 
 function onCompositionStart(): void {
