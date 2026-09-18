@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AiRequest,
   AppSettings,
@@ -31,9 +31,10 @@ const api: SheepTextApi = {
   saveSettings: (settings: AppSettings) => ipcRenderer.invoke('settings:save', currentWindowId(), settings),
   saveAs: (draft: Draft) => ipcRenderer.invoke('draft:save-as', currentWindowId(), draft),
   importFile: () => ipcRenderer.invoke('draft:import-file', currentWindowId()),
-  openLocalFile: (filePath: string) => ipcRenderer.invoke('file:open', filePath),
+  openLocalFile: (filePath: string) => ipcRenderer.invoke('file:open', currentWindowId(), filePath),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   checkExternalChange: (draftId: string) => ipcRenderer.invoke('file:check-external', currentWindowId(), draftId),
-  resolveExternalChange: (draftId: string, action: 'reload' | 'keep') => ipcRenderer.invoke('file:resolve-external', currentWindowId(), draftId, action),
+  resolveExternalChange: (draftId: string, action: 'reload' | 'keep', input: DraftSaveInput) => ipcRenderer.invoke('file:resolve-external', currentWindowId(), draftId, action, input),
   savePastedImage: (draftId: string, input: PastedImageInput) => ipcRenderer.invoke('draft:paste-image', currentWindowId(), draftId, input),
   getStorageInfo: () => ipcRenderer.invoke('storage:info', currentWindowId()),
   backupData: () => ipcRenderer.invoke('storage:backup', currentWindowId()),

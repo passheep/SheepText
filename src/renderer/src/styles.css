@@ -662,10 +662,12 @@
 
 
 /* 2026-09-11 0.3.0 体验优化 */
-.history-item.is-virtual{height:64px!important}
-.history-item-open{justify-content:flex-start!important;gap:0!important;padding:6px 10px 3px!important}
+/* 行高由历史虚拟列表传入，预留 8px 行间距；底部操作独立于打开按钮。 */
+.history-item.is-virtual{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;width:auto;height:calc(var(--history-row-height,104px) - 8px)!important}
+.history-item-open{justify-content:flex-start!important;gap:4px!important;padding:7px 10px 3px!important;cursor:pointer}
 .history-item-top{grid-template-columns:auto minmax(0,1fr) 30px}
-.history-item-bottom{margin-top:auto;margin-bottom:0;min-height:14px!important;line-height:14px!important}
+.history-item-bottom{margin:0;padding:0 10px 7px;min-height:22px!important;line-height:16px!important;gap:6px}
+.history-item-open:focus-visible{outline:2px solid var(--primary);outline-offset:-3px;border-radius:10px}
 .history-item-doc-icon{display:none!important}
 
 .floating-command-hint.format-hint{width:auto!important;min-width:36px!important;padding:0 7px;color:var(--primary)!important;font:800 9px/1 var(--font-ui);letter-spacing:-.02em}
@@ -698,9 +700,10 @@
 .sheep-milkdown-editor .ProseMirror{padding-right:72px;padding-left:72px}
 .milkdown-editor-shell.has-line-numbers .sheep-milkdown-editor .ProseMirror{padding-left:92px}
 .sheep-milkdown-editor .milkdown-list-item-block li{gap:5px;color:var(--text-primary)}
-.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper{width:20px;height:calc(var(--milkdown-font-size,15px) * 1.78);color:var(--text-primary)}
-.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper>.label{width:20px;height:calc(var(--milkdown-font-size,15px) * 1.78);padding:2px 0;color:var(--text-primary)}
-.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper svg{fill:var(--text-primary)}
+/* 标记与正文第一行采用相同字体、行高及上下留白，不按整段高度居中。 */
+.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper{width:20px;height:calc(var(--milkdown-font-size,15px) * 1.78 + 4px);font:inherit;color:var(--text-primary);flex-shrink:0}
+.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper>.label{display:flex;align-items:center;justify-content:flex-end;width:20px;height:100%;padding:2px 0;font:inherit;line-height:1.78;color:var(--text-primary)}
+.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper svg{width:1em;height:1em;display:block;fill:var(--text-primary)}
 
 .sheep-milkdown-editor .milkdown-block-handle{gap:1px;margin-left:-6px}
 .milkdown-editor-shell.has-line-numbers .sheep-milkdown-editor .milkdown-block-handle{margin-left:-1px}
@@ -782,13 +785,14 @@
 .sheep-milkdown-editor .milkdown-list-item-block .children>ol{padding-left:1.45em}
 
 .milkdown-find-widget.sheep-find-widget{position:sticky;top:8px;display:block;width:min(520px,calc(100% - 24px));margin:8px 12px 0 auto;padding:7px;border-radius:12px;box-shadow:0 14px 38px rgba(25,22,34,.22)}
-.milkdown-find-widget .milkdown-find-row.sheep-find-search-row{grid-template-columns:24px minmax(112px,1fr) 28px 50px repeat(4,28px);gap:5px}
-.milkdown-find-widget .milkdown-find-row.sheep-find-replace-row{display:grid;grid-template-columns:24px minmax(130px,1fr) auto auto;gap:5px;margin-top:6px}
+/* 两行共用输入列宽：100% 减去查找行其余列和 7 个间隙。 */
+.milkdown-find-widget .milkdown-find-row.sheep-find-search-row{grid-template-columns:24px minmax(0,1fr) 28px 50px repeat(4,28px);gap:5px}
+.milkdown-find-widget .milkdown-find-row.sheep-find-replace-row{display:grid;grid-template-columns:24px minmax(0,calc(100% - 249px)) max-content max-content;gap:5px;margin-top:6px}
 .milkdown-find-widget .sheep-find-options{display:flex}
 @media(max-width:620px){
   .milkdown-find-widget.sheep-find-widget{width:calc(100% - 16px);margin:8px 8px 0 auto;padding:6px}
-  .milkdown-find-widget .milkdown-find-row.sheep-find-search-row{grid-template-columns:22px minmax(88px,1fr) 26px 44px repeat(4,26px);gap:3px}
-  .milkdown-find-widget .milkdown-find-row.sheep-find-replace-row{grid-template-columns:22px minmax(94px,1fr) auto auto;gap:3px}
+  .milkdown-find-widget .milkdown-find-row.sheep-find-search-row{grid-template-columns:22px minmax(0,1fr) 26px 44px repeat(4,26px);gap:3px}
+  .milkdown-find-widget .milkdown-find-row.sheep-find-replace-row{grid-template-columns:22px minmax(0,calc(100% - 217px)) max-content max-content;gap:3px}
   .milkdown-find-widget .sheep-find-icon-button{width:26px}
   .milkdown-find-widget .sheep-find-count{font-size:8px}
 }
@@ -805,10 +809,10 @@
 .cm-live-heading{color:var(--text-primary)!important}
 
 /* 加号与拖动柄靠近正文：收紧浮层偏移与图标间距 */
-.sheep-milkdown-editor .milkdown-block-handle{gap:0;margin-left:-14px}
+.sheep-milkdown-editor .milkdown-block-handle{gap:0;margin-left:0}
 .sheep-milkdown-editor .milkdown-block-handle .operation-item{width:24px;height:24px;padding:2px;border-radius:6px}
 .sheep-milkdown-editor .milkdown-block-handle .operation-item svg{width:17px;height:17px}
-@media(max-width:680px){.sheep-milkdown-editor .milkdown-block-handle{margin-left:-10px}}
+@media(max-width:680px){.sheep-milkdown-editor .milkdown-block-handle{margin-left:0}}
 
 /* 代码块：背景、留白、边框与文字颜色贴合软件主题 */
 .sheep-milkdown-editor .milkdown-code-block{margin:6px 0;padding:6px 12px 12px;border:1px solid var(--border);border-radius:10px;background:color-mix(in srgb,var(--bg-soft) 72%,transparent);box-shadow:none}
@@ -836,9 +840,10 @@
 
 
 /* 2026-09-17 Markdown 大纲悬浮导航 */
+.milkdown-editor-frame{position:relative;width:100%;height:100%;min-width:0;min-height:0}
 .milkdown-outline{position:absolute;top:10px;right:14px;z-index:70}
 .milkdown-outline-trigger{display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--border);border-radius:9px;color:var(--text-tertiary);background:color-mix(in srgb,var(--surface-elevated) 88%,transparent);box-shadow:var(--shadow-sm);cursor:pointer;backdrop-filter:blur(16px);transition:.15s ease}
-.milkdown-outline-trigger:hover{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 30%,var(--border));background:var(--primary-soft)}
+.milkdown-outline-trigger:hover,.milkdown-outline-trigger.is-active{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 30%,var(--border));background:var(--primary-soft)}
 .milkdown-outline-panel{position:absolute;top:calc(100% + 6px);right:0;z-index:71;width:min(300px,calc(100vw - 40px));max-height:min(56vh,420px);overflow:auto;padding:6px;border:1px solid var(--border-strong);border-radius:12px;background:color-mix(in srgb,var(--surface-elevated) 96%,transparent);box-shadow:var(--shadow-md);backdrop-filter:blur(20px);user-select:none}
 .milkdown-outline-empty{margin:6px 8px;padding:8px 0;color:var(--text-tertiary);font-size:11px;text-align:center}
 .milkdown-outline-item{display:flex;align-items:center;gap:7px;width:100%;max-width:100%;padding:7px 12px;border:0;border-radius:8px;color:var(--text-secondary);background:transparent;cursor:pointer;text-align:left;font-size:12px;transition:.13s ease}
@@ -870,10 +875,19 @@
 
 /* 2026-09-17 文稿历史文件文稿标识 */
 .mini-badge.file-badge{display:inline-flex;align-items:center;gap:3px;color:var(--primary)}
-.history-file-path{display:flex;align-items:center;gap:5px;margin-top:3px;max-width:100%;overflow:hidden;color:var(--text-tertiary);font-size:10px}
+.history-file-path{display:flex;align-items:center;gap:5px;margin-top:3px;width:100%;min-width:0;max-width:100%;overflow:hidden;color:var(--text-tertiary);font-size:10px;line-height:16px}
 .history-file-path svg{flex:0 0 auto}
 .history-file-path span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.history-item-bottom-right{display:inline-flex;align-items:center;gap:7px}
-.history-open-folder{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid var(--border);border-radius:6px;color:var(--text-tertiary);background:transparent;cursor:pointer;font-size:10px;transition:.13s ease}
+.history-item-bottom-right{display:inline-flex;flex:0 0 auto;align-items:center;gap:7px}
+.history-meta svg{flex:0 0 auto}
+.history-open-folder{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid var(--border);border-radius:6px;color:var(--text-tertiary);background:transparent;cursor:pointer;font-size:10px;line-height:16px;white-space:nowrap;transition:.13s ease}
 .history-open-folder:hover{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 28%,var(--border));background:var(--primary-soft)}
+.history-open-folder:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .delete-file-warning{display:block;margin-top:5px;color:var(--danger);font-weight:650;word-break:break-all}
+
+
+/* 2026-09-17 拖拽文件到窗口打开提示 */
+.drag-file-overlay{position:fixed;inset:0;z-index:420;display:grid;place-items:center;background:color-mix(in srgb,var(--primary-soft) 55%,transparent);backdrop-filter:blur(1px);pointer-events:none}
+.drag-file-hint{display:grid;justify-items:center;gap:6px;padding:26px 34px;border:2px dashed color-mix(in srgb,var(--primary) 45%,var(--border-strong));border-radius:18px;background:var(--surface-elevated);color:var(--primary);box-shadow:var(--shadow-md)}
+.drag-file-hint strong{color:var(--text-primary);font-size:14px}
+.drag-file-hint span{color:var(--text-tertiary);font-size:11px}

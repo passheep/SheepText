@@ -97,7 +97,9 @@ Milkdown 已经接入：
 
 用户指定的原始图标来源：
 
-`C:\000Program\SheepText\图片\编辑.svg`
+`C:\000Program\SheepText\图片\icon11 (自定义).png`（20260917 更新，原图保持不变）。
+
+使用 `uv run scripts/update-icons.py "C:/000Program/SheepText/图片/icon11 (自定义).png"` 同步多尺寸 ICO、托盘与应用内 PNG；`resources/icon-source.svg` 为历史素材，不作为当前图标来源。
 
 仓库内构建资源：
 

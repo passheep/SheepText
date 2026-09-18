@@ -2,12 +2,12 @@
 import {
   ChevronDown, ClipboardPaste, Code2, Copy, FileDown, FilePlus2, FolderOpen,
   History, Image, Maximize2, MessageSquareText, Minus, PanelTop, Pin, Plus,
-  Settings as SettingsIcon, Sparkles, Text, WandSparkles, X
+  RefreshCw, Save, Settings as SettingsIcon, Sparkles, Text, WandSparkles, X
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { HISTORY_PAGE_SIZE, SAVE_DEBOUNCE_MS, SCENE_LABELS } from '../../shared/constants'
 import type {
-  AiRequest, AiResult, AppSettings, Draft, DraftSummary, EnhanceMode, ModelConfigPublic,
+  AiRequest, AiResult, AppSettings, Draft, DraftSaveInput, DraftSummary, EnhanceMode, ModelConfigPublic,
   DockSide, SceneId, ToastPayload, WindowBootstrap, WindowInteractionState
 } from '../../shared/types'
 import AiResultPanel from './components/AiResultPanel.vue'
@@ -39,24 +39,25 @@ type PasteNotice = {
 }
 
 // F17 外部修改对话框状态
-const externalConflict = ref<{ draftId: string; path: string } | null>(null)
+const externalConflict = ref<{ draftId: string; path: string; missing: boolean } | null>(null)
+const externalResolving = ref(false)
 let externalChecking = false
 
 // 窗口重新聚焦时检查文件是否被外部修改（仅文件文稿）
 async function checkExternalOnFocus(): Promise<void> {
-  if (externalChecking || !draft.value?.filePath || closing.value || externalConflict.value) return
+  if (externalChecking || !draft.value?.filePath || externalConflict.value) return
+  const target = draft.value
   externalChecking = true
   try {
-    const result = await window.sheepText.checkExternalChange(draft.value.id)
-    if (result.changed && draft.value) {
-      if (result.missing) {
-        showToast({ type: 'error', message: '文件已被删除或移动，保存前请先另存到其他位置' })
-      } else if (result.path) {
-        externalConflict.value = { draftId: draft.value.id, path: result.path }
-      }
+    const result = await window.sheepText.checkExternalChange(target.id)
+    if (result.changed && draft.value?.id === target.id) {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+      externalConflict.value = { draftId: target.id, path: result.path ?? target.filePath!, missing: Boolean(result.missing) }
+      saveState.value = 'error'
+      saveError.value = '本地文件发生变化，等待确认后继续保存'
     }
-  } catch {
-    // 检查失败不打扰用户
+  } catch (error) {
+    showToast({ type: 'error', message: '文件状态检查失败：' + cleanError(error) })
   } finally {
     externalChecking = false
   }
@@ -65,24 +66,38 @@ async function checkExternalOnFocus(): Promise<void> {
 // 外部修改处理：重新加载磁盘内容或用内存版本覆盖
 async function resolveExternal(action: 'reload' | 'keep'): Promise<void> {
   const conflict = externalConflict.value
-  if (!conflict) return
-  externalConflict.value = null
+  if (!conflict || externalResolving.value || draft.value?.id !== conflict.draftId) return
+  externalResolving.value = true
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
   try {
-    const result = await window.sheepText.resolveExternalChange(conflict.draftId, action)
-    if (action === 'reload' && draft.value?.id === conflict.draftId) {
-      // 直接更新数据源；编辑器由 modelValue watch 灌入新内容
-      draft.value.content = result.content
-      draft.value.version += 1
-      lastSavedVersion.value = draft.value.version
-      await nextTick()
-      if (result.convertedFromGbk) showToast({ type: 'info', message: '文件原为 GBK 编码，已按 UTF-8 重新加载' })
-    } else if (action === 'keep') {
-      showToast({ type: 'success', message: '已用当前内容覆盖磁盘文件' })
-      scheduleSave(40)
+    // 等待已发出的保存返回，再传递当前内存正文，不能用数据库旧正文覆盖文件。
+    if (saveInFlight) await saveInFlight
+    const input = draftSaveSnapshot(draft.value!)
+    const result = await window.sheepText.resolveExternalChange(conflict.draftId, action, input)
+    if (draft.value?.id !== conflict.draftId) return
+    const editedDuringRequest = draft.value.version !== input.version
+    externalConflict.value = null
+    if (editedDuringRequest) {
+      // 保留请求期间的新编辑，使用新版本再次保存，避免异步回填覆盖输入。
+      draft.value.version = Math.max(draft.value.version, result.draft.version + 1)
+      lastSavedVersion.value = result.draft.version
+      externalResolving.value = false
+      scheduleSave()
+    } else {
+      setCurrentDraft(result.draft)
     }
+    closeAiPanel()
+    showToast({ type: 'success', message: action === 'reload' ? '已重新加载磁盘内容' : '已保存当前窗口内容' })
   } catch (error) {
     showToast({ type: 'error', message: cleanError(error) })
+  } finally {
+    externalResolving.value = false
   }
+}
+
+// 普通对象快照避免 Vue 响应式代理跨 IPC，同时保留未保存的正文与版本。
+function draftSaveSnapshot(value: Draft): DraftSaveInput {
+  return { id: value.id, content: value.content, version: value.version, scene: value.scene, modelConfigId: value.modelConfigId, displayMode: value.displayMode }
 }
 const pasteNotice = ref<PasteNotice | null>(null)
 let pasteNoticeTimer: ReturnType<typeof setTimeout> | null = null
@@ -184,6 +199,7 @@ const appVersion = ref('0.3.0')
 const encryptionAvailable = ref(true)
 const editor = ref<EditorExpose | null>(null)
 const editorFocused = ref(false)
+const outlineHeld = ref(false)
 const isComposing = ref(false)
 const selection = reactive({ from: 0, to: 0, text: '' })
 const saveState = ref<'saved' | 'saving' | 'error'>('saved')
@@ -261,22 +277,86 @@ const aiRangeLabel = computed(() => {
   if (!snapshot) return '全文'
   return snapshot.isSelection ? `选区 ${snapshot.text.length} 字` : '全文'
 })
+// 文件拖入期间保持窗口展开，避免停靠窗口在操作中收起。
+const dragFileActive = ref(false)
+let dragFileDepth = 0
 const interactionState = computed<WindowInteractionState>(() => ({
   interacting: editorFocused.value,
   composing: isComposing.value,
   drawerOpen: historyOpen.value,
-  menuOpen: newMenuOpen.value || sceneMenuOpen.value || openSelectCount.value > 0 || settingsOpen.value || Boolean(pasteNotice.value),
+  menuOpen: newMenuOpen.value || sceneMenuOpen.value || openSelectCount.value > 0 || settingsOpen.value || Boolean(pasteNotice.value) || dragFileActive.value || Boolean(externalConflict.value) || outlineHeld.value,
   aiPreviewOpen: ai.open
 }))
+
+// F15 拖拽文件到窗口打开：仅接管文件，不影响编辑器文本和块拖动。
+
+function isFileDrag(event: DragEvent): boolean {
+  return [...(event.dataTransfer?.types ?? [])].includes('Files')
+}
+
+function handleDragEnter(event: DragEvent): void {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  dragFileDepth += 1
+  dragFileActive.value = true
+}
+
+function handleDragOver(event: DragEvent): void {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  // 文件由窗口统一打开，避免编辑器先接管拖放。
+  event.stopPropagation()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+}
+
+function handleDragLeave(event: DragEvent): void {
+  if (!isFileDrag(event)) return
+  dragFileDepth = Math.max(0, dragFileDepth - 1)
+  if (dragFileDepth === 0) dragFileActive.value = false
+}
+
+async function handleFileDrop(event: DragEvent): Promise<void> {
+  if (!isFileDrag(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  dragFileDepth = 0
+  dragFileActive.value = false
+  // 在事件有效期内读取全部路径，后续逐个异步打开。
+  const paths: string[] = []
+  for (const file of [...(event.dataTransfer?.files ?? [])]) {
+    try {
+      const path = window.sheepText.getPathForFile(file)
+      if (!path) throw new Error('无法获取拖入文件的路径')
+      if (!paths.includes(path)) paths.push(path)
+    } catch (error) {
+      showToast({ type: 'error', message: cleanError(error) })
+    }
+  }
+  for (const path of paths) {
+    try {
+      const result = await window.sheepText.openLocalFile(path)
+      if (result.convertedFromGbk) showToast({ type: 'info', message: '文件原为 GBK 编码，已按 UTF-8 打开，保存时将转换' })
+    } catch (error) {
+      showToast({ type: 'error', message: cleanError(error) })
+    }
+  }
+}
 
 onMounted(async () => {
   try {
     const bootstrap = await window.sheepText.bootstrap(windowId)
     applyBootstrap(bootstrap)
     registerEvents()
+    await checkExternalOnFocus()
     await nextTick()
+    window.addEventListener('focus', checkExternalOnFocus)
     window.addEventListener('keydown', handleGlobalShortcut, true)
     document.addEventListener('pointerdown', handleOutsidePointerDown, true)
+    // F15 拖拽文件打开：窗口级监听，阻止浏览器默认行为
+    window.addEventListener('dragenter', handleDragEnter, true)
+    window.addEventListener('dragover', handleDragOver, true)
+    window.addEventListener('dragleave', handleDragLeave, true)
+    window.addEventListener('drop', handleFileDrop, true)
     editor.value?.focus()
   } catch (error) {
     showToast({ type: 'error', message: cleanError(error) })
@@ -290,16 +370,23 @@ onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
   if (toastTimer) clearTimeout(toastTimer)
   if (settingsSaveTimer) clearTimeout(settingsSaveTimer)
+  window.removeEventListener('focus', checkExternalOnFocus)
+  if (newMenuCloseTimer) clearTimeout(newMenuCloseTimer)
   window.removeEventListener('keydown', handleGlobalShortcut, true)
   document.removeEventListener('pointerdown', handleOutsidePointerDown, true)
+  window.removeEventListener('dragenter', handleDragEnter, true)
+  window.removeEventListener('dragover', handleDragOver, true)
+  window.removeEventListener('dragleave', handleDragLeave, true)
+  window.removeEventListener('drop', handleFileDrop, true)
   unsubscribers.forEach((unsubscribe) => unsubscribe())
 })
 
 watch(() => [draft.value?.id, draft.value?.displayMode], hidePasteNotice)
 watch(interactionState, (state) => window.sheepText.setInteractionState(windowId, state), { deep: true })
-// 窗口从后台回到前台时检查文件是否被外部修改（F17）
-watch(() => document.hasFocus(), (focused) => { if (focused) void checkExternalOnFocus() })
-window.addEventListener('focus', () => void checkExternalOnFocus())
+// 首次加载和切换文稿都同步系统窗口标题。
+watch(() => draft.value?.filePath, (filePath) => {
+  document.title = filePath ? filePath.split(/[\\/]/).pop() + ' - SheepText' : 'SheepText'
+}, { immediate: true })
 watch(historyOpen, (open) => {
   if (open) void loadHistory(true)
 })
@@ -411,6 +498,7 @@ function bumpVersionAndSave(): void {
 }
 
 function scheduleSave(delay = SAVE_DEBOUNCE_MS): void {
+  if (externalConflict.value || externalResolving.value) return
   saveState.value = 'saving'
   saveError.value = ''
   if (saveTimer) clearTimeout(saveTimer)
@@ -423,6 +511,7 @@ async function flushSave(): Promise<boolean> {
     saveTimer = null
   }
   if (saveInFlight) await saveInFlight
+  if (externalConflict.value || externalResolving.value) return false
   if (!draft.value || draft.value.version <= lastSavedVersion.value) {
     saveState.value = 'saved'
     return true
@@ -449,6 +538,7 @@ async function flushSave(): Promise<boolean> {
     saveState.value = 'error'
     saveError.value = cleanError(error)
     showToast({ type: 'error', message: `自动保存失败：${saveError.value}` })
+    if (draft.value?.filePath) void checkExternalOnFocus()
     return false
   }).finally(() => {
     if (saveInFlight === operation) saveInFlight = null
@@ -490,12 +580,9 @@ async function importFile(): Promise<void> {
   try {
     const result = await window.sheepText.importFile()
     if (result.canceled || !result.draft) return
-    setCurrentDraft(result.draft)
+    if (!result.openedInNewWindow) setCurrentDraft(result.draft)
     closeHistory()
-    closeAiPanel()
-    await nextTick()
-    editor.value?.focus()
-    showToast({ type: 'success', message: '文件内容已导入为独立文稿，不会修改或同步原文件' })
+    showToast({ type: 'success', message: '已在独立窗口打开本地文件，编辑后自动同步保存' })
   } catch (error) {
     showToast({ type: 'error', message: '打开文件失败：' + cleanError(error) })
   }
@@ -508,6 +595,7 @@ function handleOutsidePointerDown(event: PointerEvent): void {
 }
 
 function handleGlobalShortcut(event: KeyboardEvent): void {
+  if (externalConflict.value || externalResolving.value) return
   if (!event.ctrlKey || event.altKey) return
   const key = event.key.toLowerCase()
   if (key === 'n') {
@@ -556,6 +644,8 @@ function setCurrentDraft(value: Draft): void {
   draft.value = value
   lastSavedVersion.value = value.version
   saveState.value = 'saved'
+  saveError.value = ''
+  externalConflict.value = null
   Object.assign(selection, { from: 0, to: 0, text: '' })
   // F19：文件文稿同步窗口标题为文件名
   document.title = value.filePath ? value.filePath.split(/[\\/]/).pop() + ' - SheepText' : 'SheepText'
@@ -806,7 +896,9 @@ async function copyDraft(): Promise<void> {
 
 async function saveAs(): Promise<void> {
   newMenuOpen.value = false
-  if (!draft.value || !await flushSave()) return
+  if (!draft.value) return
+  // 另存副本是文件丢失/冲突时的救援入口，不先强制覆盖原文件。
+  if (saveInFlight) await saveInFlight
   try {
     const snapshot: Draft = {
       id: draft.value.id, content: draft.value.content, createdAt: draft.value.createdAt,
@@ -887,7 +979,7 @@ function cleanError(error: unknown): string {
               <div v-if="newMenuOpen" class="new-menu">
                 <button type="button" @click="createDraft"><FilePlus2 :size="17" /><span><strong>新建文稿</strong><small>在当前窗口打开空白草稿</small></span></button>
                 <button type="button" @click="createWindow"><PanelTop :size="17" /><span><strong>新建窗口</strong><small>独立编辑另一份内容</small></span></button>
-                <button type="button" @click="importFile"><FolderOpen :size="17" /><span><strong>从文件中打开</strong><small>导入 TXT / MD 为独立文稿</small></span></button>
+                <button type="button" @click="importFile"><FolderOpen :size="17" /><span><strong>从文件中打开</strong><small>在新窗口编辑本地 TXT / MD 文件</small></span></button>
                 <button type="button" @click="saveAs"><FileDown :size="17" /><span><strong>另存为</strong><small>导出当前文稿到文件</small></span></button>
                 <button type="button" @click="copyDraft"><Copy :size="17" /><span><strong>复制全文</strong><small>复制当前文稿内容</small></span></button>
               </div>
@@ -926,7 +1018,7 @@ function cleanError(error: unknown): string {
           <span class="scope-chip" :class="{ selected: hasSelection }">{{ hasSelection ? '已选 ' + selection.text.length.toLocaleString('zh-CN') + ' 字' : characterCount.toLocaleString('zh-CN') + ' 字' }}</span>
           </div>
         </div>
-        <div class="floating-command floating-command-right no-drag">
+        <div v-if="hasDefaultModel" class="floating-command floating-command-right no-drag">
           <span class="floating-command-hint scene-hint" :title="'当前场景：' + SCENE_LABELS[draft.scene]">
             <MessageSquareText v-if="draft.scene === 'general'" :size="16" />
             <Code2 v-else-if="draft.scene === 'coding'" :size="16" />
@@ -954,6 +1046,7 @@ function cleanError(error: unknown): string {
             <MilkdownEditor
               v-if="draft.displayMode === 'markdown'"
               :key="`${draft.id}-milkdown`"
+              :readonly="externalResolving"
               ref="editor"
               :model-value="draft.content"
               :font-size="settings.fontSize"
@@ -966,10 +1059,12 @@ function cleanError(error: unknown): string {
               @pasted="onPasted"
               @paste-invalidated="hidePasteNotice"
               @toast="showToast"
+              @outline-hold="outlineHeld = $event"
             />
             <TextEditor
               v-else-if="draft.displayMode === 'txt'"
               :key="`${draft.id}-text`"
+              :readonly="externalResolving"
               ref="editor"
               :model-value="draft.content"
               :display-mode="draft.displayMode"
@@ -1001,21 +1096,33 @@ function cleanError(error: unknown): string {
           </div>
         </Transition>
 
+        <Transition name="popover">
+          <div v-if="dragFileActive" class="drag-file-overlay">
+            <div class="drag-file-hint">
+              <FilePlus2 :size="26" />
+              <strong>松手打开文件</strong>
+              <span>支持 TXT 与 Markdown，每个文件在新窗口打开</span>
+            </div>
+          </div>
+        </Transition>
+
         <Transition name="modal">
-          <div v-if="externalConflict" class="external-conflict-overlay no-drag" @mousedown.self="externalConflict = null">
-            <div class="external-conflict-dialog" role="alertdialog" aria-modal="true" aria-label="检测到文件被外部修改">
-              <h3>文件已被外部修改</h3>
+          <div v-if="externalConflict" class="external-conflict-overlay no-drag">
+            <div class="external-conflict-dialog" role="alertdialog" aria-modal="true" aria-label="本地文件变更确认" @keydown.stop>
+              <h3>{{ externalConflict.missing ? '文件已被移动或删除' : '文件已被外部修改' }}</h3>
               <p class="external-conflict-path">{{ externalConflict.path }}</p>
-              <p>磁盘上的文件内容已发生变化。重新加载会放弃当前窗口中未保存的修改；保留我的版本会用当前内容覆盖磁盘文件。</p>
-              <div class="external-conflict-actions">
-                <BaseButton variant="secondary" size="sm" @click="resolveExternal('reload')">重新加载磁盘内容</BaseButton>
-                <BaseButton variant="primary" size="sm" @click="resolveExternal('keep')">保留我的版本</BaseButton>
+              <p>{{ externalConflict.missing ? '当前内容仍保留在窗口中，请另存副本以避免丢失。恢复原文件后可重新加载。' : '自动保存已暂停。重新加载会放弃当前未保存的修改；保留我的版本会将当前窗口内容写入磁盘。也可先另存副本。' }}</p>
+              <div class="external-conflict-actions" style="flex-wrap: wrap">
+                <BaseButton variant="ghost" size="sm" :disabled="externalResolving" @click="saveAs"><template #icon><FileDown :size="15" /></template>另存副本</BaseButton>
+                <BaseButton variant="secondary" size="sm" :disabled="externalResolving" @click="resolveExternal('reload')"><template #icon><RefreshCw :size="15" /></template>重新加载</BaseButton>
+                <BaseButton v-if="!externalConflict.missing" variant="primary" size="sm" :disabled="externalResolving" @click="resolveExternal('keep')"><template #icon><Save :size="15" /></template>保留我的版本</BaseButton>
               </div>
             </div>
           </div>
         </Transition>
 
         <HistoryDrawer
+          @toast="showToast"
           :open="historyOpen"
           :items="historyItems"
           :search="historySearch"

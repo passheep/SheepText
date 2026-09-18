@@ -190,6 +190,7 @@ export interface ImportDraftResult {
   canceled: boolean
   filePath?: string
   draft?: Draft
+  openedInNewWindow?: boolean
 }
 
 export interface PastedImageInput {
@@ -208,10 +209,12 @@ export interface SheepTextApi {
   saveDraft: (input: DraftSaveInput) => Promise<Draft>
   /** 打开本地文件为文件文稿（新窗口）；reused 表示该文件已在窗口中打开；convertedFromGbk 表示非 UTF-8 已转换 */
   openLocalFile: (filePath: string) => Promise<{ opened: boolean; windowId: string; draft: Draft; snapshot?: { mtimeMs: number; size: number } | null; reused?: boolean; convertedFromGbk?: boolean }>
+  /** 取拖入 File 对象的磁盘路径（Electron webUtils） */
+  getPathForFile: (file: File) => string
   /** 检查文件文稿是否被外部修改（窗口重新聚焦时调用） */
   checkExternalChange: (draftId: string) => Promise<{ changed: boolean; missing?: boolean; path?: string }>
   /** 外部修改处理：reload=重新读磁盘，keep=内存版本覆盖磁盘 */
-  resolveExternalChange: (draftId: string, action: 'reload' | 'keep') => Promise<{ content: string; convertedFromGbk?: boolean; missing?: boolean }>
+  resolveExternalChange: (draftId: string, action: 'reload' | 'keep', input: DraftSaveInput) => Promise<{ draft: Draft }>
   createDraft: (windowId: string) => Promise<Draft>
   openDraft: (windowId: string, draftId: string) => Promise<OpenDraftResult>
   searchHistory: (query: HistoryQuery) => Promise<HistoryPage>

@@ -1,14 +1,22 @@
 <script setup lang="ts">
 import { AlertTriangle, Clock3, File, Folder, FolderOpen, LoaderCircle, Search, Sparkles, Trash2, X } from '@lucide/vue'
-import { computed, ref, watch } from 'vue'
-import type { DraftSummary } from '../../../shared/types'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import type { DraftSummary, ToastPayload } from '../../../shared/types'
 import BaseButton from './BaseButton.vue'
-
-// 在资源管理器中显示文件所在位置（F18）
-function openContainingFolder(filePath: string): void {
-  void window.sheepText.showItemInFolder(filePath)
-}
 import IconButton from './IconButton.vue'
+
+// 在资源管理器中显示文件所在位置（F18），失败交由父组件统一提示。
+async function openContainingFolder(filePath: string): Promise<void> {
+  try {
+    await window.sheepText.showItemInFolder(filePath)
+  } catch (error) {
+    emit('toast', { type: 'error', message: `打开文件夹失败：${error instanceof Error ? error.message : String(error)}` })
+  }
+}
+
+function fileName(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() || filePath
+}
 
 const props = defineProps<{
   open: boolean
@@ -25,6 +33,7 @@ const emit = defineEmits<{
   close: []
   loadMore: []
   hold: [value: boolean]
+  toast: [payload: ToastPayload]
 }>()
 
 const localSearch = ref(props.search)
@@ -32,13 +41,29 @@ const listElement = ref<HTMLElement | null>(null)
 const scrollTop = ref(0)
 const viewportHeight = ref(500)
 const pendingDelete = ref<DraftSummary | null>(null)
-const itemHeight = 72
+// 行步长包含 8px 间距；CSS 使用同一变量，文件名、路径和操作区不会重叠。
+const itemHeight = 104
 const overscan = 5
 const visibleStart = computed(() => Math.max(0, Math.floor(scrollTop.value / itemHeight) - overscan))
 const visibleEnd = computed(() => Math.min(props.items.length, Math.ceil((scrollTop.value + viewportHeight.value) / itemHeight) + overscan))
 const visibleItems = computed(() => props.items.slice(visibleStart.value, visibleEnd.value))
 const virtualHeight = computed(() => props.items.length * itemHeight)
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+let listObserver: ResizeObserver | null = null
+
+watch(listElement, (element) => {
+  listObserver?.disconnect()
+  if (!element) return
+  const measure = (): void => { viewportHeight.value = element.clientHeight }
+  measure()
+  listObserver = new ResizeObserver(measure)
+  listObserver.observe(element)
+})
+
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+  listObserver?.disconnect()
+})
 
 watch(() => props.search, (value) => {
   if (value !== localSearch.value) localSearch.value = value
@@ -122,7 +147,7 @@ function fullTime(timestamp: number): string {
       </label>
 
       <div ref="listElement" class="history-list" @scroll="onScroll">
-        <div v-if="items.length" class="history-virtual" :style="{ height: virtualHeight + 'px' }">
+        <div v-if="items.length" class="history-virtual" :style="{ height: virtualHeight + 'px', '--history-row-height': itemHeight + 'px' }">
           <div
             v-for="(item, virtualIndex) in visibleItems"
             :key="item.id"
@@ -138,18 +163,19 @@ function fullTime(timestamp: number): string {
                   <span class="mini-badge">{{ item.displayMode === 'markdown' ? 'MD' : 'TXT' }}</span>
                   <span v-if="item.filePath" class="mini-badge file-badge" title="本地文件文稿"><Folder :size="11" />文件</span>
                 </span>
-                <span class="history-summary">{{ item.summary || '空白文稿' }}</span>
+                <span class="history-summary" :title="item.filePath ? fileName(item.filePath) : item.summary">{{ item.filePath ? fileName(item.filePath) : item.summary || '空白文稿' }}</span>
                 <span class="history-delete-slot" aria-hidden="true" />
               </span>
               <span v-if="item.filePath" class="history-file-path" :title="item.filePath"><File :size="12" /><span>{{ item.filePath }}</span></span>
-              <span class="history-item-bottom">
-                <span class="history-meta" :title="fullTime(item.updatedAt)"><Clock3 :size="12" />{{ formatTime(item.updatedAt) }}</span>
-                <span class="history-item-bottom-right">
-                  <span class="history-count">{{ item.characterCount.toLocaleString('zh-CN') }} 字</span>
-                  <button v-if="item.filePath" type="button" class="history-open-folder" :title="item.filePath" @click.stop="openContainingFolder(item.filePath)"><FolderOpen :size="13" />打开文件夹</button>
-                </span>
-              </span>
             </button>
+            <!-- 操作按钮与打开文稿按钮并列，避免嵌套 button 导致键盘和点击行为异常。 -->
+            <div class="history-item-bottom">
+              <span class="history-meta" :title="fullTime(item.updatedAt)"><Clock3 :size="12" />{{ formatTime(item.updatedAt) }}</span>
+              <span class="history-item-bottom-right">
+                <span class="history-count">{{ item.characterCount.toLocaleString('zh-CN') }} 字</span>
+                <button v-if="item.filePath" type="button" class="history-open-folder" :title="'打开文件夹：' + item.filePath" @click="openContainingFolder(item.filePath)"><FolderOpen :size="13" />打开文件夹</button>
+              </span>
+            </div>
             <IconButton class="history-delete-button" title="删除文稿" size="sm" danger @click.stop="requestDelete(item)"><Trash2 :size="15" /></IconButton>
           </div>
         </div>
@@ -173,7 +199,7 @@ function fullTime(timestamp: number): string {
             <span class="delete-warning-icon"><AlertTriangle :size="22" /></span>
             <div>
               <h3>确定删除这篇文稿？</h3>
-              <p>删除后无法恢复。{{ pendingDelete.isCurrent ? '当前窗口会自动切换到新的空白文稿。' : '' }}<strong v-if="pendingDelete.filePath" class="delete-file-warning">本地文件也将一并删除：{{ pendingDelete.filePath }}</strong></p>
+              <p>将移除这篇文稿的历史记录。{{ pendingDelete.isCurrent ? '当前窗口会自动切换到新的空白文稿。' : '' }}<strong v-if="pendingDelete.filePath" class="delete-file-warning">本地文件将移入系统回收站，可在回收站中还原文件（不会自动恢复历史记录）：{{ pendingDelete.filePath }}</strong></p>
             </div>
             <div class="history-delete-actions">
               <BaseButton variant="ghost" size="sm" @click="cancelDelete"><template #icon><X :size="15" /></template>取消</BaseButton>

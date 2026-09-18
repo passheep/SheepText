@@ -1,6 +1,6 @@
 import { app, BrowserWindow, screen } from 'electron'
 import { writeFile } from 'node:fs/promises'
-import { resolve, join } from 'node:path'
+import { basename, resolve, join } from 'node:path'
 import {
   DOCK_COLLAPSE_DELAY,
   DOCK_EXPAND_DELAY,
@@ -73,7 +73,16 @@ export class WindowManager {
     }
 
     const draft = this.store.getMostRecentDraft() ?? this.store.createDraft()
-    const record = this.store.createWindowRecord(draft.id, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
+    // 与托盘重开保持一致：没有待恢复窗口时，继承最近关闭窗口的尺寸和位置。
+    const lastBounds = this.store.getLastClosedWindowBounds()
+    const record = this.store.createWindowRecord(
+      draft.id, lastBounds?.width ?? WINDOW_DEFAULT_WIDTH, lastBounds?.height ?? WINDOW_DEFAULT_HEIGHT
+    )
+    if (lastBounds) {
+      record.x = lastBounds.x
+      record.y = lastBounds.y
+      record.displayId = lastBounds.displayId
+    }
     await this.createWindow(record, startHidden)
   }
 
@@ -86,10 +95,8 @@ export class WindowManager {
   /** 为本地文件创建独立窗口（需求 F15：每个文件一个新窗口） */
   async createWindowForDraft(draftId: string, show = true): Promise<string> {
     const record = this.store.createWindowRecord(draftId, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
-    const browserWindow = await this.createWindow(record, !show)
-    return browserWindow.webContents.getURL().includes('windowId=')
-      ? new URL(browserWindow.webContents.getURL()).searchParams.get('windowId') ?? record.id
-      : record.id
+    await this.createWindow(record, !show)
+    return record.id
   }
 
   async createWindow(record: WindowRecord, startHidden = false): Promise<BrowserWindow> {
@@ -102,7 +109,10 @@ export class WindowManager {
     this.store.upsertWindow({ ...normalized, width: preferredWidth, height: preferredHeight })
 
     const settings = this.store.getSettings()
+    // 渲染页完成 bootstrap 前，系统窗口也使用已保存的文件名；后续由 App 的标题 watcher 同步。
+    const filePath = this.store.getDraft(normalized.draftId)?.filePath
     const browserWindow = new BrowserWindow({
+      title: filePath ? `${basename(filePath)} - SheepText` : 'SheepText',
       x: normalized.x ?? undefined,
       y: normalized.y ?? undefined,
       width: normalized.width,
@@ -337,6 +347,8 @@ export class WindowManager {
     runtime.record.draftId = draftId
     runtime.record.lastActiveAt = Date.now()
     this.store.setWindowDraft(windowId, draftId)
+    const filePath = this.store.getDraft(draftId)?.filePath
+    runtime.browserWindow.setTitle(filePath ? `${basename(filePath)} - SheepText` : 'SheepText')
   }
 
   closeWindow(windowId: string): void {

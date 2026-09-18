@@ -11,6 +11,12 @@ let store: DataStore | null = null
 let windows: WindowManager | null = null
 let tray: Tray | null = null
 let quitting = false
+let fileService: ReturnType<typeof registerIpc> | null = null
+let workspaceReady = false
+let drainingOpenQueue = false
+const openQueue: Array<{ argv: string[]; cwd: string; activateIfEmpty: boolean }> = [
+  { argv: process.argv, cwd: process.cwd(), activateIfEmpty: false }
+]
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'sheeptext-asset',
@@ -31,31 +37,38 @@ if (!hasSingleInstanceLock) app.quit()
 
 // 从命令行参数提取待打开的本地文件（需求 F15）
 function extractFileArgs(argv: string[]): string[] {
-  return argv.filter((arg) => /\.(txt|md|markdown)$/i.test(arg) && !arg.startsWith('-')).map((arg) => resolve(arg))
+  return argv.filter((arg) => /\.(txt|md|markdown)$/i.test(arg) && !arg.startsWith('-'))
 }
 
-// 在主进程就绪后逐个打开文件（每个文件一个新窗口）
-async function openFilesFromArgs(argv: string[]): Promise<void> {
-  for (const filePath of extractFileArgs(argv)) {
-    try {
-      const existing = store?.findFileDraft(filePath)
-      const record = existing ? store?.getOpenWindowForDraft(existing.id) : null
-      if (record) { windows?.activateWindow(record.id); continue }
-      const { readTextFile } = await import('./file-drafts')
-      const { content } = await readTextFile(filePath)
-      const draft = existing ? existing : store!.createFileDraft(filePath, content, filePath.toLowerCase().match(/\.(md|markdown)$/i) ? 'markdown' : 'txt')
-      if (existing) store!.saveDraft({ id: existing.id, content, version: existing.version, scene: existing.scene, modelConfigId: existing.modelConfigId, displayMode: existing.displayMode })
-      await windows?.createWindowForDraft(draft.id)
-    } catch {
-      // 单个文件打开失败不阻断其他文件
+// 就绪前到达的 second-instance 不丢弃；相对路径必须以发起进程的 cwd 解析。
+async function drainOpenQueue(): Promise<void> {
+  if (!workspaceReady || !fileService || drainingOpenQueue) return
+  drainingOpenQueue = true
+  try {
+    while (openQueue.length) {
+      const request = openQueue.shift()!
+      const files = extractFileArgs(request.argv)
+      if (!files.length && request.activateIfEmpty) windows?.showRecentOrCreate()
+      for (const filePath of files) {
+        try { await fileService.openLocalFile(filePath, request.cwd) }
+        catch (error) {
+          console.error('[SheepText] openLocalFile', filePath, error)
+          // 单个文件失败不阻断队列，但必须告知用户，不能静默吞掉。
+          if (windows && store) {
+            const live = store.getRecoveryWindows().some((record) => windows?.getBrowserWindow(record.id))
+            if (live) windows.showRecentOrCreate()
+            else await windows.createNewWindow(true)
+            windows.broadcast('app:toast', { type: 'error', message: `打开文件失败：${filePath}：${error instanceof Error ? error.message : String(error)}` })
+          }
+        }
+      }
     }
-  }
+  } finally { drainingOpenQueue = false }
 }
 
-app.on('second-instance', (_event, argv) => {
-  const files = extractFileArgs(argv)
-  if (files.length) void openFilesFromArgs(argv)
-  else windows?.showRecentOrCreate()
+app.on('second-instance', (_event, argv, cwd) => {
+  openQueue.push({ argv, cwd, activateIfEmpty: true })
+  void drainOpenQueue()
 })
 
 app.whenReady().then(async () => {
@@ -76,14 +89,14 @@ app.whenReady().then(async () => {
   })
   windows = new WindowManager(store)
   const aiService = new AiService(store)
-  registerIpc(store, aiService, windows)
+  fileService = registerIpc(store, aiService, windows)
   createTray(windows)
   windows.startDockMonitor()
 
   const startHidden = process.argv.includes('--hidden')
   await windows.restoreWorkspace(startHidden)
-  // 冷启动命令行里携带的文件路径（文件关联/拖到图标）
-  await openFilesFromArgs(process.argv)
+  workspaceReady = true
+  await drainOpenQueue()
 
   app.on('activate', () => windows?.showRecentOrCreate())
 })

@@ -30,6 +30,7 @@ const emit = defineEmits<{
   toast: [payload: ToastPayload]
   pasted: [range: { from: number; to: number }, text: string]
   pasteInvalidated: []
+  outlineHold: [value: boolean]
 }>()
 
 type SearchMatch = {
@@ -61,6 +62,8 @@ const hasEditorSelection = ref(false)
 // 大纲导航：从 ProseMirror 文档树提取标题及真实节点位置
 type OutlineItem = { level: number; text: string; pos: number }
 const outlineOpen = ref(false)
+const outlinePinned = ref(false)
+watch(outlineOpen, (open) => emit('outlineHold', open))
 const outlineItems = ref<OutlineItem[]>([])
 let outlineCloseTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -76,6 +79,32 @@ let syncingScroll = false
 let localFontSize = props.fontSize
 let pendingExternalMarkdown: string | null = null
 let cursorUpdateFrame = 0
+
+// 取块内首行正文的矩形：列表等结构的行盒不在块元素自身，需下钻到首个正文文本
+function measureFirstLine(el: HTMLElement, blockRect: DOMRect): { top: number; height: number } {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  let node: Node | null = null
+  while ((node = walker.nextNode())) {
+    const text = node.nodeValue ?? ''
+    if (!text.trim()) continue
+    // 列表符号所在的 label-wrapper 不算正文
+    if ((node as Text).parentElement?.closest('.label-wrapper')) continue
+    const start = text.search(/\S/)
+    if (start < 0) continue
+    const range = document.createRange()
+    range.setStart(node, start)
+    range.setEnd(node, start + 1)
+    const glyph = range.getBoundingClientRect()
+    if (glyph.height > 0) return { top: glyph.top, height: glyph.height }
+  }
+  // 回退：按块自身的内边距与行高推算首行
+  const style = window.getComputedStyle(el)
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
+  const lineHeight = Number.parseFloat(style.lineHeight) || blockRect.height
+  const contentHeight = Math.max(blockRect.height - paddingTop - paddingBottom, 0)
+  return { top: blockRect.top + paddingTop, height: Math.min(lineHeight, contentHeight) || blockRect.height }
+}
 
 const matchLabel = computed(() => {
   if (searchError.value) return '表达式错误'
@@ -122,6 +151,17 @@ onMounted(async () => {
         latexLabel: '公式'
       },
       [CrepeFeature.BlockEdit]: {
+        // 操作柄对齐首行文字中心：仅把首行区域交给定位，避免整段居中或顶对齐造成高低不一。
+        blockHandle: {
+          getOffset: () => 5,
+          getPosition: ({ active }) => {
+            const rect = active.el.getBoundingClientRect()
+            const line = measureFirstLine(active.el, rect)
+            return { x: rect.x, y: line.top, width: rect.width, height: line.height, top: line.top, right: rect.right, bottom: line.top + line.height, left: rect.left }
+          },
+          // 位置已是首行区域，居中即可与文字同行。
+          getPlacement: () => 'left'
+        },
         textGroup: {
           label: '文字',
           text: { label: '正文' },
@@ -680,7 +720,20 @@ function handleOutlineEnter(): void {
 
 function handleOutlineLeave(): void {
   if (outlineCloseTimer) clearTimeout(outlineCloseTimer)
+  if (outlinePinned.value) return
   outlineCloseTimer = setTimeout(() => { outlineOpen.value = false }, 220)
+}
+
+// 悬停临时预览，点击固定，再次点击取消并收起。
+function toggleOutlinePinned(): void {
+  if (outlinePinned.value) closeOutline()
+  else { outlinePinned.value = true; handleOutlineEnter() }
+}
+
+function closeOutline(): void {
+  if (outlineCloseTimer) clearTimeout(outlineCloseTimer)
+  outlinePinned.value = false
+  outlineOpen.value = false
 }
 
 function jumpToHeading(item: OutlineItem): void {
@@ -728,12 +781,26 @@ function clearPasteFormat(from: number, to: number): boolean {
 
 onBeforeUnmount(() => {
   if (outlineCloseTimer) clearTimeout(outlineCloseTimer)
+  emit('outlineHold', false)
 })
 
 defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio, clearPasteFormat })
 </script>
 
 <template>
+  <div class="milkdown-editor-frame">
+    <!-- 大纲是滚动容器的兄弟节点，始终固定在编辑区右上角。 -->
+    <div class="milkdown-outline no-drag" @mouseenter="handleOutlineEnter" @mouseleave="handleOutlineLeave" @keydown.esc.stop="closeOutline">
+      <button type="button" class="milkdown-outline-trigger" :class="{ 'is-active': outlinePinned }" :aria-pressed="outlinePinned" :aria-expanded="outlineOpen" :title="outlinePinned ? '取消固定文档大纲' : '文档大纲（点击固定）'" @click="toggleOutlinePinned"><ListTree :size="17" /></button>
+      <Transition name="popover">
+        <div v-if="outlineOpen" class="milkdown-outline-panel">
+          <p v-if="!outlineItems.length" class="milkdown-outline-empty">暂无标题，使用 # 可创建标题</p>
+          <button v-for="(item, index) in outlineItems" :key="`${index}-${item.pos}`" type="button" class="milkdown-outline-item" :style="{ paddingLeft: `${(item.level - 1) * 14 + 12}px` }" :title="item.text" @click="jumpToHeading(item)">
+            <span class="milkdown-outline-level">H{{ item.level }}</span><span class="milkdown-outline-text">{{ item.text }}</span>
+          </button>
+        </div>
+      </Transition>
+    </div>
   <div
     ref="shell"
     class="milkdown-editor-shell"
@@ -744,18 +811,6 @@ defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRat
     }"
     :style="{ '--milkdown-font-size': `${fontSize}px` }"
   >
-    <div class="milkdown-outline no-drag" @mouseenter="handleOutlineEnter" @mouseleave="handleOutlineLeave">
-      <button type="button" class="milkdown-outline-trigger" title="文档大纲" @click="handleOutlineEnter"><ListTree :size="17" /></button>
-      <Transition name="popover">
-        <div v-if="outlineOpen" class="milkdown-outline-panel">
-          <p v-if="!outlineItems.length" class="milkdown-outline-empty">暂无标题，使用 # 可创建标题</p>
-          <button v-for="(item, index) in outlineItems" :key="`${index}-${item.pos}`" type="button" class="milkdown-outline-item" :style="{ paddingLeft: `${(item.level - 1) * 14 + 12}px` }" :title="item.text" @click="jumpToHeading(item)">
-            <span class="milkdown-outline-level">H{{ item.level }}</span><span class="milkdown-outline-text">{{ item.text }}</span>
-          </button>
-        </div>
-      </Transition>
-    </div>
-
     <div v-if="searchOpen" ref="findWidget" class="milkdown-find-widget sheep-find-widget no-drag" :class="{ 'is-replacing': replaceOpen }" @mousedown.stop>
       <div class="milkdown-find-row sheep-find-row sheep-find-search-row">
         <button class="milkdown-find-toggle sheep-find-expand" :class="{ 'is-expanded': replaceOpen }" type="button" :title="replaceOpen ? '收起替换' : '展开替换'" @click="replaceOpen = !replaceOpen">›</button>
@@ -783,5 +838,6 @@ defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRat
     </div>
 
     <div ref="host" class="sheep-milkdown-editor" />
+  </div>
   </div>
 </template>

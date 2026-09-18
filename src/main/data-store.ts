@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, rmSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { basename, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { safeStorage } from 'electron'
 import { DEFAULT_SETTINGS } from '../shared/constants'
+import { normalizeFilePath } from './file-drafts'
 import type {
   AppSettings, ApiProtocol, DisplayMode, Draft, DraftSaveInput, DraftSummary,
   HistoryPage, HistoryQuery, ModelConfigInput, ModelConfigPublic, ProviderType,
@@ -256,12 +257,18 @@ export class DataStore {
 
   /** 按文件路径查找已有文稿（同一文件重复打开时复用记录） */
   findFileDraft(filePath: string): Draft | null {
-    const row = this.db.prepare('SELECT * FROM drafts WHERE file_path = ? ORDER BY updated_at DESC LIMIT 1').get(filePath) as DraftRow | undefined
+    const normalized = normalizeFilePath(filePath)
+    // 兼容旧库中未归一的盘符、大小写及分隔符，不依赖 SQLite 仅 ASCII 的 NOCASE。
+    const rows = this.db.prepare('SELECT * FROM drafts WHERE file_path IS NOT NULL ORDER BY updated_at DESC').all() as DraftRow[]
+    const row = rows.find((item) => normalizeFilePath(item.file_path!) === normalized)
     return row ? this.mapDraft(row) : null
   }
 
   /** 从本地文件创建文件文稿：内容双写数据库，filePath 记录磁盘位置 */
   createFileDraft(filePath: string, content: string, displayMode: DisplayMode): Draft {
+    filePath = normalizeFilePath(filePath)
+    const existing = this.findFileDraft(filePath)
+    if (existing) return existing
     const settings = this.getSettings()
     const now = Date.now()
     const draft: Draft = {
@@ -281,7 +288,7 @@ export class DataStore {
 
   /** 把已有文稿转变为文件文稿（用于普通文稿另存到文件后绑定） */
   bindDraftFile(id: string, filePath: string): void {
-    this.db.prepare('UPDATE drafts SET file_path = ? WHERE id = ?').run(filePath, id)
+    this.db.prepare('UPDATE drafts SET file_path = ? WHERE id = ?').run(normalizeFilePath(filePath), id)
   }
 
   createDraft(content = '', displayMode?: DisplayMode): Draft {
@@ -345,8 +352,7 @@ export class DataStore {
       this.db.prepare('DELETE FROM window_states WHERE draft_id = ?').run(id)
       this.db.prepare('DELETE FROM drafts WHERE id = ?').run(id)
     })
-    const directory = resolve(this.assetDirectory, id)
-    if (directory.startsWith(resolve(this.assetDirectory) + sep)) rmSync(directory, { recursive: true, force: true })
+    // 删除文稿只删记录，保留资源目录，避免永久删除仍被导出内容或其他文稿引用的图片。
   }
 
   searchHistory(query: HistoryQuery): HistoryPage {
