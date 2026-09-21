@@ -8,10 +8,24 @@ import { normalizeFilePath } from './file-drafts'
 import type {
   AppSettings, ApiProtocol, DisplayMode, Draft, DraftSaveInput, DraftSummary,
   HistoryPage, HistoryQuery, ModelConfigInput, ModelConfigPublic, ProviderType,
-  ReasoningEffort, SceneId, WindowRecord
+  ReasoningEffort, SceneId, TokenUsageInput, TokenUsageQuery, TokenUsageResult,
+  TokenUsageSummary, WindowRecord
 } from '../shared/types'
 
 type DbValue = string | number | bigint | null | Uint8Array
+
+/** token_usage 聚合查询的原始行。 */
+type UsageRow = {
+  key: string
+  label: string
+  calls: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cacheHitTokens: number
+  cacheMissTokens: number
+  errorCalls: number
+}
 
 type DraftRow = {
   id: string
@@ -132,10 +146,29 @@ export class DataStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS token_usage (
+        id TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        day TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        scene TEXT,
+        model_config_id TEXT,
+        model_name TEXT NOT NULL,
+        prompt_tokens INTEGER NOT NULL DEFAULT 0,
+        completion_tokens INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        duration_ms INTEGER,
+        error_message TEXT
+      );
       CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS idx_windows_draft_open ON window_states(draft_id, is_open);
       CREATE INDEX IF NOT EXISTS idx_windows_active ON window_states(is_open, last_active_at DESC);
       CREATE INDEX IF NOT EXISTS idx_window_tabs_window ON window_tabs(window_id, position);
+      CREATE INDEX IF NOT EXISTS idx_token_usage_day ON token_usage(day);
+      CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model_config_id, day);
     `)
     // F14 迁移：旧库补 file_path 列（null=普通文稿，非空=本地文件文稿）
     const draftColumns = this.db.prepare('PRAGMA table_info(drafts)').all() as Array<{ name: string }>
@@ -651,6 +684,111 @@ export class DataStore {
       temperature: row.temperature, reasoningEffort: row.reasoning_effort, isDefault: Boolean(row.is_default),
       hasApiKey: Boolean(row.api_key?.length), createdAt: row.created_at, updatedAt: row.updated_at
     }
+  }
+
+  /** 写入一条 AI 调用用量；失败也要记，补全的静默失败靠这里排查。 */
+  recordTokenUsage(input: TokenUsageInput): void {
+    const createdAt = Date.now()
+    const promptTokens = Math.max(0, Math.round(input.promptTokens ?? 0))
+    const completionTokens = Math.max(0, Math.round(input.completionTokens ?? 0))
+    // 部分服务（非 DeepSeek）不返回缓存字段，此时整段输入计入未命中，命中率才不会虚高。
+    const cacheHitTokens = Math.max(0, Math.round(input.cacheHitTokens ?? 0))
+    const cacheMissTokens = input.cacheMissTokens === undefined
+      ? Math.max(0, promptTokens - cacheHitTokens)
+      : Math.max(0, Math.round(input.cacheMissTokens))
+    this.db.prepare(`
+      INSERT INTO token_usage(
+        id, created_at, day, kind, scene, model_config_id, model_name,
+        prompt_tokens, completion_tokens, total_tokens,
+        cache_hit_tokens, cache_miss_tokens, status, duration_ms, error_message
+      ) VALUES (
+        $id, $createdAt, $day, $kind, $scene, $modelConfigId, $modelName,
+        $promptTokens, $completionTokens, $totalTokens,
+        $cacheHitTokens, $cacheMissTokens, $status, $durationMs, $errorMessage
+      )
+    `).run({
+      $id: randomUUID(),
+      $createdAt: createdAt,
+      $day: this.toDayKey(createdAt),
+      $kind: input.kind,
+      $scene: input.scene,
+      $modelConfigId: input.modelConfigId,
+      $modelName: input.modelName,
+      $promptTokens: promptTokens,
+      $completionTokens: completionTokens,
+      $totalTokens: promptTokens + completionTokens,
+      $cacheHitTokens: cacheHitTokens,
+      $cacheMissTokens: cacheMissTokens,
+      $status: input.status,
+      $durationMs: input.durationMs ?? null,
+      $errorMessage: input.errorMessage ? String(input.errorMessage).slice(0, 300) : null
+    })
+  }
+
+  /** 按日期区间 / 模型 / 类型聚合用量，同时给出汇总、按天与按模型三个视图。 */
+  queryTokenUsage(query: TokenUsageQuery): TokenUsageResult {
+    const params: Record<string, DbValue> = {
+      $fromDay: query.fromDay,
+      $toDay: query.toDay,
+      $modelConfigId: query.modelConfigId,
+      $kind: query.kind
+    }
+    const conditions = [
+      '($fromDay IS NULL OR day >= $fromDay)',
+      '($toDay IS NULL OR day <= $toDay)',
+      '($modelConfigId IS NULL OR model_config_id = $modelConfigId)',
+      '($kind IS NULL OR kind = $kind)'
+    ].join(' AND ')
+    const metrics = `COUNT(*) AS calls,
+      SUM(prompt_tokens) AS promptTokens,
+      SUM(completion_tokens) AS completionTokens,
+      SUM(total_tokens) AS totalTokens,
+      SUM(cache_hit_tokens) AS cacheHitTokens,
+      SUM(cache_miss_tokens) AS cacheMissTokens,
+      SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errorCalls`
+    const summary = this.db.prepare(`SELECT ${metrics} FROM token_usage WHERE ${conditions}`).get(params)
+    const byDay = this.db.prepare(`
+      SELECT day AS key, day AS label, ${metrics} FROM token_usage
+      WHERE ${conditions} GROUP BY day ORDER BY day DESC
+    `).all(params)
+    const byModel = this.db.prepare(`
+      SELECT COALESCE(model_config_id, '') AS key, model_name AS label, ${metrics} FROM token_usage
+      WHERE ${conditions} GROUP BY model_name ORDER BY totalTokens DESC
+    `).all(params)
+    return {
+      summary: this.mapUsageSummary(summary as UsageRow | undefined),
+      byDay: (byDay as UsageRow[]).map((row) => ({ ...this.mapUsageSummary(row), key: row.key, label: row.label })),
+      byModel: (byModel as UsageRow[]).map((row) => ({ ...this.mapUsageSummary(row), key: row.key, label: row.label }))
+    }
+  }
+
+  /** 清空全部用量记录（设置页手动触发，需二次确认）。 */
+  clearTokenUsage(): void {
+    this.db.exec('DELETE FROM token_usage')
+  }
+
+  private mapUsageSummary(row: UsageRow | undefined): TokenUsageSummary {
+    const cacheHitTokens = Number(row?.cacheHitTokens ?? 0)
+    const cacheMissTokens = Number(row?.cacheMissTokens ?? 0)
+    const cacheTotal = cacheHitTokens + cacheMissTokens
+    return {
+      calls: Number(row?.calls ?? 0),
+      promptTokens: Number(row?.promptTokens ?? 0),
+      completionTokens: Number(row?.completionTokens ?? 0),
+      totalTokens: Number(row?.totalTokens ?? 0),
+      cacheHitTokens,
+      cacheMissTokens,
+      // 没有任何缓存数据时给 null，界面显示「—」而不是 0%，避免误导。
+      cacheHitRate: cacheTotal > 0 ? cacheHitTokens / cacheTotal : null,
+      errorCalls: Number(row?.errorCalls ?? 0)
+    }
+  }
+
+  /** 本地日期键（YYYY-MM-DD），按用户所在时区切天。 */
+  private toDayKey(timestamp: number): string {
+    const date = new Date(timestamp)
+    const pad = (value: number) => String(value).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
   }
 
   private mapWindow(row: WindowRow): WindowRecord {

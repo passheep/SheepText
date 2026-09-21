@@ -8,7 +8,7 @@ import type {
   Draft,
   DraftSaveInput,
   HistoryQuery,
-  ModelConfigInput, PastedImageInput,
+  ModelConfigInput, PastedImageInput, TokenUsageQuery,
   WindowAction, WindowInteractionState
 } from '../shared/types'
 import { AiService } from './ai-service'
@@ -239,6 +239,16 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
   ipcMain.handle('ai:cancel', (event, windowId: string, requestId: string) => {
     assertWindow(event, windowId)
     aiService.cancel(requestId)
+  })
+
+  ipcMain.handle('stats:query', (event, windowId: string, query: TokenUsageQuery) => {
+    assertWindow(event, windowId)
+    return store.queryTokenUsage(query)
+  })
+
+  ipcMain.handle('stats:clear', (event, windowId: string) => {
+    assertWindow(event, windowId)
+    store.clearTokenUsage()
   })
 
   ipcMain.handle('settings:get', (event, windowId: string) => {

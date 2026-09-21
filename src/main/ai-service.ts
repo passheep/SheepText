@@ -11,6 +11,14 @@ import type { DataStore } from './data-store'
 
 type ModelWithSecret = ModelConfigPublic & { apiKey: string }
 
+/** 模型返回的 token 用量；缓存命中/未命中字段仅部分服务（如 DeepSeek）返回。 */
+type ModelUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  cacheHitTokens?: number
+  cacheMissTokens?: number
+}
+
 type ProtectedText = {
   text: string
   restore: (value: string) => string
@@ -111,6 +119,18 @@ export class AiService {
       if (resultText.trim() === request.text.trim()) {
         throw new Error('模型返回内容与原文相同，请尝试创意重写或调整模型配置')
       }
+      this.store.recordTokenUsage({
+        kind: 'enhance',
+        scene: request.scene,
+        modelConfigId: config.id,
+        modelName: config.name,
+        promptTokens: response.usage?.inputTokens,
+        completionTokens: response.usage?.outputTokens,
+        cacheHitTokens: response.usage?.cacheHitTokens,
+        cacheMissTokens: response.usage?.cacheMissTokens,
+        status: 'ok',
+        durationMs: Date.now() - startedAt
+      })
       return {
         requestId: request.requestId,
         text: resultText,
@@ -118,6 +138,18 @@ export class AiService {
         modelName: config.name,
         usage: response.usage
       }
+    } catch (error) {
+      // 失败也要记一笔：用量统计页能看到失败次数与原因，方便排查模型或配置问题
+      this.store.recordTokenUsage({
+        kind: 'enhance',
+        scene: request.scene,
+        modelConfigId: config.id,
+        modelName: config.name,
+        status: 'error',
+        durationMs: Date.now() - startedAt,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      })
+      throw error
     } finally {
       this.activeRequests.delete(request.requestId)
       this.activeCount = Math.max(0, this.activeCount - 1)
@@ -183,7 +215,7 @@ export class AiService {
     userText: string,
     controller: AbortController,
     maxTokensOverride?: number
-  ): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number } }> {
+  ): Promise<{ text: string; usage?: ModelUsage }> {
     if (config.apiProtocol === 'responses') {
       return this.callResponses(config, systemPrompt, userText, controller, maxTokensOverride)
     }
@@ -196,7 +228,7 @@ export class AiService {
     userText: string,
     controller: AbortController,
     maxTokensOverride?: number
-  ): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number } }> {
+  ): Promise<{ text: string; usage?: ModelUsage }> {
     const payload: Record<string, unknown> = {
       model: config.modelId,
       messages: [
@@ -230,7 +262,10 @@ export class AiService {
       text,
       usage: {
         inputTokens: body?.usage?.prompt_tokens,
-        outputTokens: body?.usage?.completion_tokens
+        outputTokens: body?.usage?.completion_tokens,
+        // DeepSeek 专有：上下文缓存命中/未命中，用于算命中率
+        cacheHitTokens: body?.usage?.prompt_cache_hit_tokens,
+        cacheMissTokens: body?.usage?.prompt_cache_miss_tokens
       }
     }
   }
@@ -241,7 +276,7 @@ export class AiService {
     userText: string,
     controller: AbortController,
     maxTokensOverride?: number
-  ): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number } }> {
+  ): Promise<{ text: string; usage?: ModelUsage }> {
     const payload: Record<string, unknown> = {
       model: config.modelId,
       instructions: systemPrompt,
@@ -276,7 +311,9 @@ export class AiService {
       text,
       usage: {
         inputTokens: body?.usage?.input_tokens,
-        outputTokens: body?.usage?.output_tokens
+        outputTokens: body?.usage?.output_tokens,
+        cacheHitTokens: body?.usage?.prompt_cache_hit_tokens,
+        cacheMissTokens: body?.usage?.prompt_cache_miss_tokens
       }
     }
   }

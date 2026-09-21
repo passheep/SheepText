@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import {
-  Archive, Bot, CheckCircle2, CircleHelp, Database, Download, HardDrive, Keyboard,
+  Archive, BarChart3, Bot, CheckCircle2, CircleHelp, Database, Download, HardDrive, Keyboard,
   KeyRound, MonitorCog, Palette, Plus, RotateCcw, Save, ShieldCheck, SlidersHorizontal,
   Sparkles, Trash2, X
 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import type { AppSettings, ModelConfigInput, ModelConfigPublic, StorageInfo, ToastPayload } from '../../../shared/types'
+import type { AppSettings, ModelConfigInput, ModelConfigPublic, StorageInfo, ToastPayload, TokenUsageKind, TokenUsageResult } from '../../../shared/types'
 import BaseButton from './BaseButton.vue'
 import BaseSelect, { type SelectOption } from './BaseSelect.vue'
 import IconButton from './IconButton.vue'
 import ToggleSwitch from './ToggleSwitch.vue'
 import appIcon from '../assets/app-icon.png'
 
-type SettingsTab = 'general' | 'models' | 'shortcuts' | 'storage' | 'about'
+type SettingsTab = 'general' | 'models' | 'usage' | 'shortcuts' | 'storage' | 'about'
 
 const props = defineProps<{
   open: boolean
@@ -44,6 +44,103 @@ const pendingDeleteId = ref<string | null>(null)
 const storageInfo = ref<StorageInfo | null>(null)
 const storageLoading = ref(false)
 const storageAction = ref<'backup' | 'export' | null>(null)
+
+// ---- 用量统计 ----
+const usageResult = ref<TokenUsageResult | null>(null)
+const usageLoading = ref(false)
+const usageGrouping = ref<'day' | 'model'>('day')
+const usageRange = ref<'today' | 'week' | 'month' | 'all'>('week')
+const usageModel = ref<string>('__all__')
+const usageKind = ref<string>('__all__')
+const usageClearPending = ref(false)
+
+/** 本地日期键（YYYY-MM-DD），与主进程记录口径一致。 */
+function dayKey(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+const usageRangeOptions: SelectOption[] = [
+  { value: 'today', label: '今天' },
+  { value: 'week', label: '近 7 天' },
+  { value: 'month', label: '近 30 天' },
+  { value: 'all', label: '全部' }
+]
+
+const usageKindOptions: SelectOption[] = [
+  { value: '__all__', label: '全部类型' },
+  { value: 'enhance', label: '文本增强' },
+  { value: 'completion', label: '行内补全' }
+]
+
+const usageModelOptions = computed<SelectOption[]>(() => [
+  { value: '__all__', label: '全部模型' },
+  ...modelsDraft.value.map((model) => ({ value: model.id, label: model.name, description: model.modelId }))
+])
+
+/** 按当前筛选条件请求一次统计。 */
+async function loadUsage(): Promise<void> {
+  usageLoading.value = true
+  try {
+    const today = new Date()
+    const from = new Date(today)
+    if (usageRange.value === 'today') from.setHours(0, 0, 0, 0)
+    if (usageRange.value === 'week') from.setDate(from.getDate() - 6)
+    if (usageRange.value === 'month') from.setDate(from.getDate() - 29)
+    usageResult.value = await window.sheepText.queryTokenUsage({
+      fromDay: usageRange.value === 'all' ? null : dayKey(from),
+      toDay: null,
+      modelConfigId: usageModel.value === '__all__' ? null : usageModel.value,
+      kind: usageKind.value === '__all__' ? null : (usageKind.value as TokenUsageKind)
+    })
+  } catch (error) {
+    emit('toast', { type: 'error', message: error instanceof Error ? error.message : '读取用量统计失败' })
+  } finally {
+    usageLoading.value = false
+  }
+}
+
+async function clearUsage(): Promise<void> {
+  try {
+    await window.sheepText.clearTokenUsage()
+    usageClearPending.value = false
+    await loadUsage()
+    emit('toast', { type: 'success', message: '已清空用量记录' })
+  } catch (error) {
+    emit('toast', { type: 'error', message: error instanceof Error ? error.message : '清空失败' })
+  }
+}
+
+watch([usageRange, usageModel, usageKind], () => { if (props.open && activeTab.value === 'usage') void loadUsage() })
+
+const usageSummary = computed(() => usageResult.value?.summary ?? null)
+const usageRows = computed(() => (usageGrouping.value === 'day' ? usageResult.value?.byDay ?? [] : usageResult.value?.byModel ?? []))
+const usageEmpty = computed(() => (usageSummary.value?.calls ?? 0) === 0)
+
+/** 千分位，用量动辄上万，分隔开更好读。 */
+function formatTokens(value: number): string {
+  return value.toLocaleString('zh-CN')
+}
+
+/** 命中率：无缓存数据时显示「—」，不显示 0% 误导。 */
+function formatRate(rate: number | null): string {
+  return rate === null ? '—' : `${(rate * 100).toFixed(1)}%`
+}
+
+/** 图表用：按日期升序（最近的在右），并算出柱高比例。 */
+const usageChart = computed(() => {
+  const rows = [...(usageResult.value?.byDay ?? [])].reverse()
+  const max = rows.reduce((peak, row) => Math.max(peak, row.totalTokens), 0)
+  return rows.map((row) => ({
+    day: row.key,
+    label: row.key.slice(5),
+    total: row.totalTokens,
+    prompt: row.promptTokens,
+    completion: row.completionTokens,
+    // 柱高按总量占峰值的比例，最低 2% 保证有数据的日期不会看不见
+    height: max > 0 ? Math.max(2, Math.round((row.totalTokens / max) * 100)) : 0
+  }))
+})
 
 const themeOptions: SelectOption[] = [
   { value: 'system', label: '跟随系统', description: '自动匹配 Windows 明暗主题' },
@@ -138,6 +235,7 @@ watch(() => props.models, (models) => { modelsDraft.value = [...models] }, { dee
 watch(() => props.settings, (settings) => Object.assign(settingsDraft, settings), { deep: true })
 
 function setActiveTab(tab: SettingsTab): void {
+  if (tab === 'usage') void loadUsage()
   activeTab.value = tab
   if (tab === 'models' && !editingModel.value) {
     if (modelsDraft.value[0]) selectModel(modelsDraft.value[0].id)
@@ -294,6 +392,7 @@ function cleanError(error: unknown): string {
           <nav class="settings-nav">
             <button :class="{ active: activeTab === 'general' }" @click="setActiveTab('general')"><SlidersHorizontal :size="18" /><span>外观与行为</span></button>
             <button :class="{ active: activeTab === 'models' }" @click="setActiveTab('models')"><Bot :size="18" /><span>模型配置</span><b>{{ modelsDraft.length }}</b></button>
+            <button :class="{ active: activeTab === 'usage' }" @click="setActiveTab('usage')"><BarChart3 :size="18" /><span>用量统计</span></button>
             <button :class="{ active: activeTab === 'shortcuts' }" @click="setActiveTab('shortcuts')"><Keyboard :size="18" /><span>快捷键</span></button>
             <button :class="{ active: activeTab === 'storage' }" @click="setActiveTab('storage')"><Database :size="18" /><span>数据存储</span></button>
             <button :class="{ active: activeTab === 'about' }" @click="setActiveTab('about')"><CircleHelp :size="18" /><span>关于</span></button>
@@ -386,6 +485,78 @@ function cleanError(error: unknown): string {
               </div>
             </div>
 
+            <div v-else-if="activeTab === 'usage'" class="settings-page usage-page">
+              <div class="settings-scroll">
+                <div class="info-hero">
+                  <BarChart3 :size="24" />
+                  <div>
+                    <h3>用量统计</h3>
+                    <p>记录每次 AI 调用的 token 消耗，用来核对实际成本与缓存命中情况。</p>
+                  </div>
+                </div>
+                <div class="usage-filters">
+                  <label class="field-block"><span>时间范围</span><BaseSelect v-model="usageRange" :options="usageRangeOptions" /></label>
+                  <label class="field-block"><span>模型</span><BaseSelect v-model="usageModel" :options="usageModelOptions" /></label>
+                  <label class="field-block"><span>类型</span><BaseSelect v-model="usageKind" :options="usageKindOptions" /></label>
+                </div>
+                <div v-if="usageEmpty" class="usage-empty">
+                  <BarChart3 :size="22" />
+                  <p>暂无用量记录</p>
+                  <small>使用文本增强或行内补全后，这里会显示每次调用的 token 消耗。</small>
+                </div>
+                <template v-else>
+                  <div class="usage-cards">
+                    <div class="usage-card"><span>总 tokens</span><strong>{{ formatTokens(usageSummary?.totalTokens ?? 0) }}</strong></div>
+                    <div class="usage-card"><span>输入</span><strong>{{ formatTokens(usageSummary?.promptTokens ?? 0) }}</strong></div>
+                    <div class="usage-card"><span>输出</span><strong>{{ formatTokens(usageSummary?.completionTokens ?? 0) }}</strong></div>
+                    <div class="usage-card"><span>缓存命中</span><strong>{{ formatTokens(usageSummary?.cacheHitTokens ?? 0) }}</strong></div>
+                    <div class="usage-card"><span>未命中</span><strong>{{ formatTokens(usageSummary?.cacheMissTokens ?? 0) }}</strong></div>
+                    <div class="usage-card"><span>命中率</span><strong>{{ formatRate(usageSummary?.cacheHitRate ?? null) }}</strong></div>
+                    <div class="usage-card"><span>调用次数</span><strong>{{ formatTokens(usageSummary?.calls ?? 0) }}</strong></div>
+                    <div class="usage-card" :class="{ warn: (usageSummary?.errorCalls ?? 0) > 0 }"><span>失败次数</span><strong>{{ formatTokens(usageSummary?.errorCalls ?? 0) }}</strong></div>
+                  </div>
+                  <div v-if="usageChart.length" class="usage-chart">
+                    <div class="usage-chart-head"><span>按天总用量</span><small>峰值 {{ formatTokens(Math.max(...usageChart.map((item) => item.total))) }} tokens</small></div>
+                    <div class="usage-bars">
+                      <div v-for="item in usageChart" :key="item.day" class="usage-bar-slot" :title="`${item.day}：${formatTokens(item.total)} tokens（输入 ${formatTokens(item.prompt)} / 输出 ${formatTokens(item.completion)}）`">
+                        <div class="usage-bar" :style="{ height: `${item.height}%` }"></div>
+                        <span>{{ item.label }}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="usage-list-head">
+                    <span>明细</span>
+                    <div class="usage-group-switch">
+                      <button :class="{ active: usageGrouping === 'day' }" @click="usageGrouping = 'day'">按日期</button>
+                      <button :class="{ active: usageGrouping === 'model' }" @click="usageGrouping = 'model'">按模型</button>
+                    </div>
+                  </div>
+                  <div class="usage-table">
+                    <div class="usage-row usage-row-head">
+                      <span>{{ usageGrouping === 'day' ? '日期' : '模型' }}</span><span>调用</span><span>输入</span><span>输出</span><span>命中</span><span>未命中</span><span>命中率</span><span>合计</span>
+                    </div>
+                    <div v-for="row in usageRows" :key="row.key" class="usage-row">
+                      <span class="usage-key" :title="row.label">{{ row.label }}</span>
+                      <span>{{ formatTokens(row.calls) }}</span>
+                      <span>{{ formatTokens(row.promptTokens) }}</span>
+                      <span>{{ formatTokens(row.completionTokens) }}</span>
+                      <span>{{ formatTokens(row.cacheHitTokens) }}</span>
+                      <span>{{ formatTokens(row.cacheMissTokens) }}</span>
+                      <span>{{ formatRate(row.cacheHitRate) }}</span>
+                      <span class="usage-total">{{ formatTokens(row.totalTokens) }}</span>
+                    </div>
+                  </div>
+                  <div class="usage-actions">
+                    <template v-if="usageClearPending">
+                      <span class="usage-warn-text">清空后无法恢复，确认删除全部用量记录？</span>
+                      <BaseButton variant="ghost" size="sm" @click="usageClearPending = false">取消</BaseButton>
+                      <BaseButton variant="danger" size="sm" @click="clearUsage"><template #icon><Trash2 :size="15" /></template>确认清空</BaseButton>
+                    </template>
+                    <BaseButton v-else variant="secondary" size="sm" @click="usageClearPending = true"><template #icon><Trash2 :size="15" /></template>清空统计</BaseButton>
+                  </div>
+                </template>
+              </div>
+            </div>
             <div v-else-if="activeTab === 'shortcuts'" class="settings-page info-page"><div class="settings-scroll"><div class="info-hero"><Keyboard :size="24" /><div><h3>键盘快捷键</h3><p>在编辑窗口内随时使用，减少鼠标操作。</p></div></div><div class="shortcut-list"><div><span>新建文稿</span><kbd>Ctrl</kbd><b>+</b><kbd>N</kbd></div><div><span>新建窗口</span><kbd>Ctrl</kbd><b>+</b><kbd>Shift</kbd><b>+</b><kbd>N</kbd></div><div><span>搜索当前文本</span><kbd>Ctrl</kbd><b>+</b><kbd>F</kbd></div><div><span>复制本行到下一行</span><kbd>Ctrl</kbd><b>+</b><kbd>D</kbd></div><div><span>撤销 / 重做</span><kbd>Ctrl</kbd><b>+</b><kbd>Z</kbd><em>/</em><kbd>Ctrl</kbd><b>+</b><kbd>Y</kbd></div><div><span>调整编辑字号</span><kbd>Ctrl</kbd><b>+</b><span>鼠标滚轮</span></div></div></div></div>
 
             <div v-else-if="activeTab === 'storage'" class="settings-page info-page"><div class="settings-scroll"><div class="info-hero"><HardDrive :size="24" /><div><h3>数据存储</h3><p>草稿与设置保存在本机，可随时制作备份或导出可读数据。</p></div></div><div class="storage-grid"><div class="storage-card"><span>本地存储占用</span><strong>{{ storageLoading ? '正在计算…' : storageInfo?.formattedSize ?? '—' }}</strong></div><div class="storage-card full"><span>存储位置</span><code :title="storageInfo?.path">{{ storageInfo?.path ?? '正在读取…' }}</code></div></div><div class="storage-actions"><BaseButton variant="secondary" :loading="storageAction === 'backup'" @click="backupData"><template #icon><Archive :size="16" /></template>手动备份数据库</BaseButton><BaseButton variant="secondary" :loading="storageAction === 'export'" @click="exportData"><template #icon><Download :size="16" /></template>导出数据（JSON）</BaseButton></div><p class="storage-note">数据库备份适合完整迁移；JSON 导出不包含 API Key 明文，可用于查看和长期留存。</p></div></div>
@@ -408,4 +579,39 @@ function cleanError(error: unknown): string {
 .settings-panel{font-size:14px}.settings-header h2{font-size:20px}.settings-nav button{font-size:13px}.section-title h3{font-size:15px}.setting-row strong,.field-block>span{font-size:13px}.setting-row small,.section-title p{font-size:12px;line-height:1.55}.appearance-toggle{margin-top:2px}.settings-grid>.setting-row.full{grid-column:1/-1}
 @media(max-width:820px){.settings-layout{grid-template-columns:60px minmax(0,1fr)}.settings-nav{align-items:center;padding-inline:8px}.settings-nav button{grid-template-columns:1fr;place-items:center;width:42px;padding:0}.settings-nav button svg{margin:0}.settings-nav button span,.settings-nav button b{display:none}}
 @media(max-width:650px){.settings-scroll,.about-page{padding:14px}.settings-footer{padding:10px 14px 14px}.model-form{padding:14px}.storage-grid{grid-template-columns:1fr}}
+
+/* ---- 用量统计页 ---- */
+.usage-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px}
+.usage-empty{display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:28px;padding:36px 20px;border:1px dashed var(--border-strong);border-radius:14px;color:var(--text-tertiary);text-align:center}
+.usage-empty p{margin:0;color:var(--text-secondary);font-size:13px;font-weight:650}
+.usage-empty small{font-size:11px;line-height:1.6}
+.usage-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:18px}
+.usage-card{display:flex;flex-direction:column;gap:5px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+.usage-card span{color:var(--text-tertiary);font-size:11px}
+.usage-card strong{color:var(--text-primary);font-size:17px;font-weight:750;font-variant-numeric:tabular-nums}
+.usage-card.warn strong{color:var(--danger)}
+.usage-chart{margin-top:18px;padding:14px 16px 8px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}
+.usage-chart-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px}
+.usage-chart-head span{color:var(--text-primary);font-size:12px;font-weight:700}
+.usage-chart-head small{color:var(--text-tertiary);font-size:11px;font-variant-numeric:tabular-nums}
+.usage-bars{display:flex;align-items:flex-end;gap:6px;height:150px;overflow-x:auto;padding-bottom:2px}
+.usage-bar-slot{display:flex;flex:1 1 0;flex-direction:column;align-items:center;justify-content:flex-end;min-width:22px;height:100%;gap:6px}
+.usage-bar{width:100%;max-width:34px;min-height:3px;border-radius:5px 5px 2px 2px;background:linear-gradient(180deg,var(--primary),var(--primary-soft))}
+.usage-bar-slot>span{color:var(--text-tertiary);font-size:9px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.usage-list-head{display:flex;align-items:center;justify-content:space-between;margin:22px 0 10px}
+.usage-list-head>span{color:var(--text-primary);font-size:12px;font-weight:700}
+.usage-group-switch{display:flex;gap:4px;padding:3px;border:1px solid var(--border);border-radius:9px;background:var(--field-bg)}
+.usage-group-switch button{height:24px;padding:0 10px;border:0;border-radius:6px;color:var(--text-secondary);background:transparent;font:650 11px var(--font-ui);cursor:pointer}
+.usage-group-switch button.active{color:var(--text-primary);background:var(--surface-elevated)}
+.usage-table{border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.usage-row{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(7,minmax(0,1fr));align-items:center;gap:8px;padding:9px 12px;border-top:1px solid var(--border);font-size:11px;font-variant-numeric:tabular-nums}
+.usage-row:first-child{border-top:0}
+.usage-row>span{overflow:hidden;color:var(--text-secondary);text-overflow:ellipsis;white-space:nowrap}
+.usage-row-head{background:var(--surface)}
+.usage-row-head>span{color:var(--text-tertiary);font-weight:650}
+.usage-key{color:var(--text-primary)!important;font-weight:650}
+.usage-total{color:var(--text-primary)!important;font-weight:700}
+.usage-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:16px}
+.usage-warn-text{margin-right:auto;color:var(--text-secondary);font-size:11px}
+@media(max-width:760px){.usage-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.usage-row{grid-template-columns:minmax(0,1.4fr) repeat(3,minmax(0,1fr))}.usage-row>span:nth-child(5),.usage-row>span:nth-child(6),.usage-row>span:nth-child(7){display:none}}
 </style>

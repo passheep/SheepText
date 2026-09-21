@@ -185,7 +185,68 @@ export interface AiResult {
   usage?: {
     inputTokens?: number
     outputTokens?: number
+    /** 命中的上下文缓存 tokens（DeepSeek 专有）。 */
+    cacheHitTokens?: number
+    /** 未命中的上下文缓存 tokens；部分服务不返回该字段。 */
+    cacheMissTokens?: number
   }
+}
+
+/** 用量记录的类型：文本增强 / 行内补全。 */
+export type TokenUsageKind = 'enhance' | 'completion'
+
+/** ok=正常完成；error=失败（补全静默失败也靠这里排查）。 */
+export type TokenUsageStatus = 'ok' | 'error'
+
+/** 写入一条用量记录所需的字段。 */
+export interface TokenUsageInput {
+  kind: TokenUsageKind
+  scene: SceneId | null
+  modelConfigId: string | null
+  modelName: string
+  promptTokens?: number
+  completionTokens?: number
+  cacheHitTokens?: number
+  cacheMissTokens?: number
+  status: TokenUsageStatus
+  durationMs?: number
+  errorMessage?: string | null
+}
+
+/** 用量统计的筛选条件；字段为空表示不限制。 */
+export interface TokenUsageQuery {
+  fromDay: string | null
+  toDay: string | null
+  modelConfigId: string | null
+  kind: TokenUsageKind | null
+}
+
+/** 一组用量的汇总指标。 */
+export interface TokenUsageSummary {
+  calls: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cacheHitTokens: number
+  cacheMissTokens: number
+  /** 命中率（0~1）；无缓存数据时为 null，界面显示「—」。 */
+  cacheHitRate: number | null
+  errorCalls: number
+}
+
+/** 按天或按模型分组的一组指标。 */
+export interface TokenUsageGroup extends TokenUsageSummary {
+  /** 分组键：按天为 YYYY-MM-DD，按模型为 model_config_id。 */
+  key: string
+  /** 展示名：日期或模型名。 */
+  label: string
+}
+
+/** 统计页一次查询的完整结果。 */
+export interface TokenUsageResult {
+  summary: TokenUsageSummary
+  byDay: TokenUsageGroup[]
+  byModel: TokenUsageGroup[]
 }
 
 export interface ConnectionTestResult {
@@ -271,6 +332,8 @@ export interface SheepTextApi {
   testModel: (input: ModelConfigInput, kind: 'connection' | 'generation') => Promise<ConnectionTestResult>
   runEnhance: (request: AiRequest) => Promise<AiResult>
   cancelEnhance: (requestId: string) => Promise<void>
+  queryTokenUsage: (query: TokenUsageQuery) => Promise<TokenUsageResult>
+  clearTokenUsage: () => Promise<void>
   getSettings: () => Promise<AppSettings>
   saveSettings: (settings: AppSettings) => Promise<AppSettings>
   saveAs: (draft: Draft) => Promise<{ canceled: boolean; filePath?: string }>
