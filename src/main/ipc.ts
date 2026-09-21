@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { copyFile, cp, mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, parse } from 'node:path'
 import type {
+  AiCompletionRequest,
   AiRequest,
   AppSettings,
   Draft,
@@ -239,6 +240,17 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
   ipcMain.handle('ai:cancel', (event, windowId: string, requestId: string) => {
     assertWindow(event, windowId)
     aiService.cancel(requestId)
+  })
+
+  ipcMain.handle('ai:complete', (event, windowId: string, request: AiCompletionRequest) => {
+    assertWindow(event, windowId)
+    if (request.windowId !== windowId) throw new Error('补全请求窗口不一致')
+    return aiService.complete(request)
+  })
+
+  ipcMain.handle('ai:cancel-completion', (event, windowId: string, requestId: string) => {
+    assertWindow(event, windowId)
+    aiService.cancelCompletion(requestId)
   })
 
   ipcMain.handle('stats:query', (event, windowId: string, query: TokenUsageQuery) => {

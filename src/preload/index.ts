@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
+  AiCompletionRequest,
   AiRequest,
   AppSettings,
   Draft,
@@ -40,6 +41,8 @@ const api: SheepTextApi = {
   testModel: (input: ModelConfigInput, kind: 'connection' | 'generation') => ipcRenderer.invoke('models:test', currentWindowId(), input, kind),
   runEnhance: (request: AiRequest) => ipcRenderer.invoke('ai:enhance', currentWindowId(), request),
   cancelEnhance: (requestId: string) => ipcRenderer.invoke('ai:cancel', currentWindowId(), requestId),
+  runCompletion: (request: AiCompletionRequest) => ipcRenderer.invoke('ai:complete', currentWindowId(), request),
+  cancelCompletion: (requestId: string) => ipcRenderer.invoke('ai:cancel-completion', currentWindowId(), requestId),
   queryTokenUsage: (query: TokenUsageQuery) => ipcRenderer.invoke('stats:query', currentWindowId(), query),
   clearTokenUsage: () => ipcRenderer.invoke('stats:clear', currentWindowId()),
   getSettings: () => ipcRenderer.invoke('settings:get', currentWindowId()),

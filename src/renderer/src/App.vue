@@ -30,6 +30,7 @@ type EditorExpose = {
   setScrollRatio: (ratio: number) => void
   openSearch: () => void
   clearPasteFormat: (from: number, to: number) => boolean
+  clearCompletion: () => boolean
 }
 
 // 粘贴格式临时操作区状态：记录本次粘贴范围，超时或新编辑后失效
@@ -46,6 +47,11 @@ const externalResolving = ref(false)
 let externalChecking = false
 
 // 窗口重新聚焦时检查文件是否被外部修改（仅文件文稿）
+/** 窗口失焦时丢弃灰字与在途补全请求。 */
+function clearEditorCompletion(): void {
+  editor.value?.clearCompletion()
+}
+
 async function checkExternalOnFocus(): Promise<void> {
   if (externalChecking || !draft.value?.filePath || externalConflict.value) return
   const target = draft.value
@@ -365,6 +371,7 @@ onMounted(async () => {
     await checkExternalOnFocus()
     await nextTick()
     window.addEventListener('focus', checkExternalOnFocus)
+    window.addEventListener('blur', clearEditorCompletion)
     window.addEventListener('keydown', handleGlobalShortcut, true)
     document.addEventListener('pointerdown', handleOutsidePointerDown, true)
     // F15 拖拽文件打开：窗口级监听，阻止浏览器默认行为
@@ -510,9 +517,19 @@ function createSettingsSnapshot(source: AppSettings): AppSettings {
     defaultDisplayMode: source.defaultDisplayMode,
     editorBackground: source.editorBackground,
     editorPattern: source.editorPattern,
-    editorFont: String(source.editorFont ?? '')
+    editorFont: String(source.editorFont ?? ''),
+    completionEnabled: Boolean(source.completionEnabled),
+    completionModelConfigId: String(source.completionModelConfigId ?? ''),
+    completionTriggerKey: source.completionTriggerKey
   }
 }
+
+/** 补全模型：未单独指定时回退到「默认模型」；两者都为空时返回空串（上层据此提示）。 */
+const completionModelId = computed(() => {
+  const current = settings.value
+  if (!current?.completionEnabled) return ''
+  return String(current.completionModelConfigId || current.defaultModelConfigId || '')
+})
 
 function onContentChanged(content: string): void {
   if (!draft.value || draft.value.content === content) return
@@ -793,6 +810,7 @@ function handleGlobalShortcut(event: KeyboardEvent): void {
   if (key === 'f' && !event.shiftKey) {
     event.preventDefault()
     if (settingsOpen.value) return
+    editor.value?.clearCompletion()
     void nextTick(() => editor.value?.openSearch())
   }
 }
@@ -962,6 +980,8 @@ function trackSelectOpen(open: boolean): void {
 function openSettings(tab: 'general' | 'models' | 'shortcuts' | 'storage' | 'about' = 'general'): void {
   settingsTab.value = tab
   settingsOpen.value = true
+  // 打开设置会盖住编辑区，先丢弃灰字与在途补全
+  editor.value?.clearCompletion()
   newMenuOpen.value = false
   sceneMenuOpen.value = false
 }
@@ -972,6 +992,8 @@ async function runEnhance(mode: EnhanceMode, reuse?: RequestSnapshot): Promise<v
     showToast({ type: 'warning', message: '请先完成当前中文输入，再使用 AI 增强' })
     return
   }
+  // AI 结果面板即将打开，灰字与补全请求先让位
+  editor.value?.clearCompletion()
   const modelConfigId = reuse?.modelConfigId ?? draft.value.modelConfigId ?? settings.value?.defaultModelConfigId ?? models.value.find((model) => model.isDefault)?.id ?? models.value[0]?.id ?? null
   if (!modelConfigId || !models.value.some((model) => model.id === modelConfigId)) {
     showToast({ type: 'info', message: '先配置并选择一个可用模型' })
@@ -1258,6 +1280,10 @@ function cleanError(error: unknown): string {
               :model-value="draft.content"
               :font-size="settings.fontSize"
               :draft-id="draft.id"
+              :window-id="windowId"
+              :completion-enabled="settings.completionEnabled"
+              :completion-model-id="completionModelId"
+              :completion-trigger="settings.completionTriggerKey"
               @update:model-value="onContentChanged"
               @selection-change="onSelectionChanged"
               @focus-change="editorFocused = $event"

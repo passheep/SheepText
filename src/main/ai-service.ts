@@ -1,4 +1,6 @@
 import type {
+  AiCompletionRequest,
+  AiCompletionResult,
   AiRequest,
   AiResult,
   ConnectionTestResult,
@@ -86,11 +88,68 @@ export class AiService {
   private readonly activeRequests = new Map<string, AbortController>()
   private activeCount = 0
   private readonly maxConcurrentRequests = 4
+  // 补全并发单独计数，避免打字时的连续触发挤占文本增强请求
+  private activeCompletions = new Map<string, AbortController>()
+  private readonly maxConcurrentCompletions = 2
 
   constructor(private readonly store: DataStore) {}
 
   cancel(requestId: string): void {
     this.activeRequests.get(requestId)?.abort(new Error('请求已取消'))
+  }
+
+  /** 取消在途的补全请求；新请求发出前会先调这里取消上一个。 */
+  cancelCompletion(requestId: string): void {
+    this.activeCompletions.get(requestId)?.abort(new Error('补全请求已取消'))
+  }
+
+  /**
+   * 行内补全（FIM）。
+   * 与文本增强不同，这里失败一律不抛错，而是返回空文本静默结束，
+   * 失败原因记入用量统计（kind='completion'，status='error'），
+   * 因为补全由打字触发，弹错会干扰写作。
+   */
+  async complete(request: AiCompletionRequest): Promise<AiCompletionResult> {
+    const empty: AiCompletionResult = { requestId: request.requestId, text: '' }
+    if (this.activeCompletions.has(request.requestId)) return empty
+    if (this.activeCompletions.size >= this.maxConcurrentCompletions) return empty
+    if (!request.prefix.trim() && !request.suffix.trim()) return empty
+
+    const config = this.store.getModelWithSecret(request.modelConfigId)
+    if (!config) {
+      this.store.recordTokenUsage({
+        kind: 'completion', scene: null, modelConfigId: request.modelConfigId, modelName: '未知模型',
+        status: 'error', errorMessage: '补全模型配置不存在'
+      })
+      return empty
+    }
+
+    const controller = new AbortController()
+    this.activeCompletions.set(request.requestId, controller)
+    const startedAt = Date.now()
+    try {
+      const response = await this.callCompletion(config, request.prefix, request.suffix, controller)
+      this.store.recordTokenUsage({
+        kind: 'completion', scene: null, modelConfigId: config.id, modelName: config.name,
+        promptTokens: response.usage?.inputTokens, completionTokens: response.usage?.outputTokens,
+        cacheHitTokens: response.usage?.cacheHitTokens, cacheMissTokens: response.usage?.cacheMissTokens,
+        status: 'ok', durationMs: Date.now() - startedAt
+      })
+      return { requestId: request.requestId, text: response.text }
+    } catch (error) {
+      // 用户主动取消（切文稿、失焦等）不算失败，不记统计
+      const cancelled = controller.signal.aborted && !/超时/.test(String(controller.signal.reason ?? ''))
+      if (!cancelled) {
+        this.store.recordTokenUsage({
+          kind: 'completion', scene: null, modelConfigId: config.id, modelName: config.name,
+          status: 'error', durationMs: Date.now() - startedAt,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        })
+      }
+      return empty
+    } finally {
+      this.activeCompletions.delete(request.requestId)
+    }
   }
 
   async enhance(request: AiRequest): Promise<AiResult> {
@@ -316,6 +375,69 @@ export class AiService {
         cacheMissTokens: body?.usage?.prompt_cache_miss_tokens
       }
     }
+  }
+
+  /** 行内补全的超时与输出上限；本期用常量，不做 UI。 */
+  private readonly completionTimeoutMs = 8000
+  private readonly completionMaxTokens = 100
+
+  /**
+   * FIM 补全调用。
+   * 与 chat 接口的关键差异：入参是 prompt + suffix（无 messages），
+   * 响应取 choices[0].text（不是 choices[0].message.content）。
+   */
+  private async callCompletion(
+    config: ModelWithSecret,
+    prefix: string,
+    suffix: string,
+    controller: AbortController
+  ): Promise<{ text: string; usage?: ModelUsage }> {
+    const payload: Record<string, unknown> = {
+      model: config.modelId,
+      prompt: prefix,
+      suffix,
+      max_tokens: this.completionMaxTokens,
+      stream: false
+    }
+    if (config.temperature !== null) payload.temperature = config.temperature
+
+    const response = await this.fetchWithTimeout(
+      this.completionUrl(config.baseUrl),
+      {
+        method: 'POST',
+        headers: this.headers(config.apiKey),
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      },
+      this.completionTimeoutMs,
+      controller
+    )
+    const body = await this.readJson(response)
+    if (!response.ok) throw new Error(this.extractError(body, response.status))
+
+    const choice = body?.choices?.[0]
+    // FIM 走 text；部分只提供 chat 接口的兼容服务会回 message.content，一并兼容
+    const text = typeof choice?.text === 'string'
+      ? choice.text
+      : typeof choice?.message?.content === 'string'
+        ? choice.message.content
+        : ''
+    return {
+      text,
+      usage: {
+        inputTokens: body?.usage?.prompt_tokens,
+        outputTokens: body?.usage?.completion_tokens,
+        cacheHitTokens: body?.usage?.prompt_cache_hit_tokens,
+        cacheMissTokens: body?.usage?.prompt_cache_miss_tokens
+      }
+    }
+  }
+
+  /** DeepSeek 的 FIM 只在 /beta 基址下可用，其余供应商按原样拼接。 */
+  private completionUrl(baseUrl: string): string {
+    const normalized = baseUrl.trim().replace(/\/+$/, '')
+    if (/^https?:\/\/api\.deepseek\.com$/i.test(normalized)) return `${normalized}/beta/completions`
+    return this.apiUrl(normalized, 'completions')
   }
 
   private apiUrl(baseUrl: string, path: string): string {

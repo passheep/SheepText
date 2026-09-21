@@ -929,3 +929,7 @@
 .editor-tab:hover .tab-close,.editor-tab.is-active .tab-close{display:grid}
 .editor-tab .tab-close:hover{color:var(--danger);background:var(--danger-soft)}
 @media(max-width:640px){.editor-tab{max-width:124px;padding:0 6px 0 7px}}
+
+/* ---- AI 行内补全灰字 ---- */
+/* 只读提示：不参与选区、不响应鼠标、不换行；颜色跟随主题的弱化文字色 */
+.sheep-completion-ghost{color:var(--text-tertiary);pointer-events:none;user-select:none;-webkit-user-select:none;white-space:pre-wrap;opacity:.85}

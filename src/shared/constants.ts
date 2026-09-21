@@ -27,7 +27,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 默认不铺纹理，保持干净底色；需要时可到设置里换成方格、横线等
   editorPattern: 'none',
   // 空字符串表示沿用内置字体栈，用户可在设置里换成自己电脑中的字体
-  editorFont: ''
+  editorFont: '',
+  // 补全默认关闭：会持续产生 token 消耗，需用户主动开启
+  completionEnabled: false,
+  // 空字符串表示沿用「默认模型」
+  completionModelConfigId: '',
+  completionTriggerKey: 'alt-arrow-right'
 }
 
 export const SCENE_LABELS: Record<SceneId, string> = {

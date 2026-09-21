@@ -6,18 +6,23 @@ import { editorViewCtx, prosePluginsCtx } from '@milkdown/kit/core'
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
 import { closeHistory } from '@milkdown/prose/history'
 import { keymap } from '@milkdown/kit/prose/keymap'
-import { Plugin, TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
+import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@milkdown/kit/prose/model'
 import { callCommand, getMarkdown, replaceAll, replaceRange as replaceMarkdownRange } from '@milkdown/kit/utils'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ListTree } from '@lucide/vue'
-import type { ToastPayload } from '../../../shared/types'
+import type { CompletionTriggerKey, ToastPayload } from '../../../shared/types'
 
 const props = defineProps<{
   modelValue: string
   fontSize: number
   draftId: string
+  windowId: string
+  /** 已解析好的补全模型 ID（补全模型为空时由上层回退到默认模型）；空串表示未配置。 */
+  completionModelId: string
+  completionEnabled: boolean
+  completionTrigger: CompletionTriggerKey
   readonly?: boolean
 }>()
 
@@ -33,6 +38,65 @@ const emit = defineEmits<{
   pasteInvalidated: []
   outlineHold: [value: boolean]
 }>()
+
+// ---- AI 行内补全（灰字） ----
+// 上下文阈值：文稿不超阈值发全文，否则只发光标附近的文本
+const COMPLETION_FULL_DOC_LIMIT = 3000
+const COMPLETION_PREFIX_LIMIT = 2000
+const COMPLETION_SUFFIX_LIMIT = 500
+// 灰字最长字符数；需求定为「一句或一段」，超出容易被模型带偏
+const COMPLETION_MAX_CHARS = 200
+
+/** 灰字插件状态；from 为插入位置（ProseMirror 位置，非字符偏移）。 */
+type CompletionState = {
+  status: 'idle' | 'loading' | 'ready'
+  text: string
+  from: number | null
+}
+
+const COMPLETION_IDLE: CompletionState = { status: 'idle', text: '', from: null }
+const completionKey = new PluginKey<CompletionState>('sheep-completion')
+
+/** 触发键预设到键盘事件的映射。 */
+const COMPLETION_TRIGGERS: Record<CompletionTriggerKey, { key: string; code: string; ctrl: boolean; alt: boolean }> = {
+  'alt-arrow-right': { key: 'ArrowRight', code: 'ArrowRight', ctrl: false, alt: true },
+  'ctrl-arrow-right': { key: 'ArrowRight', code: 'ArrowRight', ctrl: true, alt: false },
+  'alt-slash': { key: '/', code: 'Slash', ctrl: false, alt: true }
+}
+
+// 纯修饰键按下时不清除灰字，否则按 Shift 会把刚出现的提示抹掉
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'])
+
+/** 灰字 DOM；只读、不参与选区、不换行。 */
+function buildCompletionDom(text: string): HTMLElement {
+  const span = document.createElement('span')
+  span.className = 'sheep-completion-ghost'
+  span.setAttribute('aria-hidden', 'true')
+  span.textContent = text
+  return span
+}
+
+/**
+ * 清洗模型输出：
+ * 取第一段、去掉与前缀结尾重复的部分、去掉模型爱加的开头引号。
+ * 模型经常把上文末尾一并返回，直接展示会看到重复文字。
+ */
+function sanitizeCompletion(raw: string, prefix: string): string {
+  if (!raw) return ''
+  let text = raw.replace(/\r\n?/g, '\n')
+  const paragraphBreak = text.indexOf('\n\n')
+  if (paragraphBreak >= 0) text = text.slice(0, paragraphBreak)
+  text = text.replace(/^[\s"'「『]+/, '').replace(/[\s]+$/, '')
+  const tail = prefix.slice(-40)
+  for (let length = Math.min(tail.length, text.length); length > 2; length -= 1) {
+    if (tail.slice(-length) === text.slice(0, length)) {
+      text = text.slice(length).replace(/^[\s"'「『]+/, '')
+      break
+    }
+  }
+  if (text.length > COMPLETION_MAX_CHARS) text = text.slice(0, COMPLETION_MAX_CHARS)
+  return text
+}
 
 type SearchMatch = {
   from: number
@@ -77,6 +141,8 @@ const PASTE_PENDING_TTL_MS = 600
 let crepe: Crepe | null = null
 let editorView: EditorView | null = null
 let searchDecorations = DecorationSet.empty
+// 在途补全的请求 ID；不为空说明有一个请求未结束，切文稿/失焦时需要取消
+let activeCompletionId: string | null = null
 let selectionScope: { from: number; to: number } | null = null
 let syncingScroll = false
 let localFontSize = props.fontSize
@@ -203,6 +269,50 @@ onMounted(async () => {
   crepe.editor.config((ctx) => {
     ctx.update(prosePluginsCtx, (plugins) => [
       keymap({ 'Mod-d': duplicateCurrentBlock }),
+      // 行内补全插件：灰字走自带 decorations，由 ProseMirror 自动与查找高亮合并
+      new Plugin<CompletionState>({
+        key: completionKey,
+        state: {
+          init: () => COMPLETION_IDLE,
+          apply(transaction, value) {
+            const meta = transaction.getMeta(completionKey) as CompletionState | undefined
+            if (meta) return meta
+            if (value.status === 'idle') return value
+            // 灰字本身不入文档，所以这里能变动的只有用户输入
+            if (transaction.docChanged) return COMPLETION_IDLE
+            if (value.from !== null) return { ...value, from: transaction.mapping.map(value.from) }
+            return value
+          }
+        },
+        props: {
+          decorations(state) {
+            const value = completionKey.getState(state)
+            if (!value || value.status !== 'ready' || !value.text || value.from === null) return null
+            return DecorationSet.create(state.doc, [
+              Decoration.widget(value.from, () => buildCompletionDom(value.text), { side: 1, key: `ghost-${value.text}` })
+            ])
+          },
+          handleKeyDown(view, event) {
+            const trigger = COMPLETION_TRIGGERS[props.completionTrigger] ?? COMPLETION_TRIGGERS['alt-arrow-right']
+            const matchesTrigger = event.altKey === trigger.alt
+              && event.ctrlKey === trigger.ctrl
+              && !event.metaKey
+              && (event.key === trigger.key || event.code === trigger.code)
+            if (matchesTrigger) {
+              void triggerCompletion(view)
+              return true
+            }
+            // 接受：→（无灰字时返回 false，让光标正常右移）
+            if (event.key === 'ArrowRight' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+              return acceptCompletion(view)
+            }
+            if (event.key === 'Escape') return clearCompletion()
+            // 其它任意键：先清灰字，再把该键交给编辑器正常处理
+            if (!MODIFIER_KEYS.has(event.key)) clearCompletion()
+            return false
+          }
+        }
+      }),
       new Plugin({
         appendTransaction(transactions, oldState, state) {
           if (!transactions.some((transaction) => transaction.docChanged)) return null
@@ -256,6 +366,8 @@ onMounted(async () => {
     })
     listener.focus(() => emit('focusChange', true))
     listener.blur(() => {
+      // 编辑器失焦时丢弃灰字，避免切回来看到一个已过期的建议
+      clearCompletion()
       requestAnimationFrame(() => {
         const focusedInside = shell.value?.contains(document.activeElement) ?? false
         emit('focusChange', focusedInside || searchOpen.value)
@@ -288,6 +400,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (cursorUpdateFrame) cancelAnimationFrame(cursorUpdateFrame)
+  // 组件卸载前取消在途补全，避免请求返回后往已销毁的视图写入
+  clearCompletion()
   if (editorView) {
     editorView.dom.removeEventListener('paste', onPasteCapture, true)
     editorView.dom.removeEventListener('compositionstart', onCompositionStart)
@@ -319,6 +433,7 @@ watch(() => props.fontSize, (size) => {
   requestAnimationFrame(syncListLabelWidth)
 })
 
+watch(() => props.draftId, () => clearCompletion())
 watch(() => props.readonly, (value) => crepe?.setReadonly(Boolean(value)))
 watch([searchText, matchCase, wholeWord, useRegex, selectionOnly], updateSearchMatches)
 watch(replaceOpen, () => nextTick(() => (replaceOpen.value ? replaceInput.value : findInput.value)?.focus({ preventScroll: true })))
@@ -841,7 +956,95 @@ onBeforeUnmount(() => {
   emit('outlineHold', false)
 })
 
-defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio, clearPasteFormat })
+
+// ---- 补全：状态写入、触发、接受、清除 ----
+
+/** 只改插件 state，不动文档；因此不会触发 markdownUpdated 与自动保存。 */
+function setCompletionState(view: EditorView, next: CompletionState): void {
+  view.dispatch(view.state.tr.setMeta(completionKey, next))
+}
+
+/** 按 F08 裁剪上下文：短文稿发全文，长文稿只发光标附近。 */
+function buildCompletionContext(view: EditorView): { prefix: string; suffix: string; pos: number } {
+  const pos = view.state.selection.to
+  const doc = view.state.doc
+  const prefixFull = doc.textBetween(0, pos, '\n', '\n')
+  const suffixFull = doc.textBetween(pos, doc.content.size, '\n', '\n')
+  const total = prefixFull.length + suffixFull.length
+  if (total <= COMPLETION_FULL_DOC_LIMIT) return { prefix: prefixFull, suffix: suffixFull, pos }
+  return {
+    prefix: prefixFull.slice(-COMPLETION_PREFIX_LIMIT),
+    suffix: suffixFull.slice(0, COMPLETION_SUFFIX_LIMIT),
+    pos
+  }
+}
+
+/** 取消在途请求并抹掉灰字；返回是否真的清掉了东西（用于决定是否拦截按键）。 */
+function clearCompletion(): boolean {
+  if (activeCompletionId) {
+    void window.sheepText.cancelCompletion(activeCompletionId)
+    activeCompletionId = null
+  }
+  if (!editorView) return false
+  const current = completionKey.getState(editorView.state)
+  if (!current || current.status === 'idle') return false
+  setCompletionState(editorView, COMPLETION_IDLE)
+  return true
+}
+
+/** 接受灰字：作为一次普通事务插入，可被 Ctrl+Z 撤销。 */
+function acceptCompletion(view: EditorView): boolean {
+  const current = completionKey.getState(view.state)
+  if (!current || current.status !== 'ready' || !current.text || current.from === null) return false
+  const transaction = view.state.tr.insertText(current.text, current.from)
+  transaction.setMeta(completionKey, COMPLETION_IDLE)
+  view.dispatch(transaction)
+  return true
+}
+
+/** 触发一次补全；在途或已有灰字时忽略，避免连按产生重复请求。 */
+async function triggerCompletion(view: EditorView): Promise<void> {
+  if (!props.completionEnabled) {
+    emit('toast', { type: 'info', message: 'AI 补全未启用，可在「设置 - 外观与行为」中开启' })
+    return
+  }
+  if (!props.completionModelId) {
+    emit('toast', { type: 'info', message: '请先在设置中配置补全模型' })
+    return
+  }
+  const current = completionKey.getState(view.state)
+  if (current && current.status !== 'idle') return
+
+  const { prefix, suffix, pos } = buildCompletionContext(view)
+  if (!prefix.trim()) {
+    emit('toast', { type: 'info', message: '光标前没有内容，无法补全' })
+    return
+  }
+
+  const requestId = `completion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  activeCompletionId = requestId
+  setCompletionState(view, { status: 'loading', text: '', from: pos })
+  try {
+    const result = await window.sheepText.runCompletion({
+      requestId,
+      windowId: props.windowId,
+      modelConfigId: props.completionModelId,
+      prefix,
+      suffix
+    })
+    // 期间切了文稿、失了焦或被新请求取代，结果一律丢弃
+    if (activeCompletionId !== requestId || editorView !== view) return
+    const text = sanitizeCompletion(result.text, prefix)
+    setCompletionState(view, text ? { status: 'ready', text, from: pos } : COMPLETION_IDLE)
+  } catch {
+    // 补全失败不打扰写作，原因已记入用量统计
+    if (activeCompletionId === requestId && editorView === view) setCompletionState(view, COMPLETION_IDLE)
+  } finally {
+    if (activeCompletionId === requestId) activeCompletionId = null
+  }
+}
+
+defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio, clearPasteFormat, clearCompletion })
 </script>
 
 <template>

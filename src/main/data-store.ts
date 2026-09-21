@@ -285,7 +285,15 @@ export class DataStore {
       // 字体族名限长，避免异常值撑坏样式
       editorFont: typeof merged.editorFont === 'string' && merged.editorFont.trim().length > 0
         ? merged.editorFont.trim().slice(0, 120)
-        : ''
+        : '',
+      completionEnabled: booleanValue(merged.completionEnabled, DEFAULT_SETTINGS.completionEnabled),
+      // 空串表示沿用「默认模型」，不做存在性校验（模型可能稍后才配置）
+      completionModelConfigId: typeof merged.completionModelConfigId === 'string'
+        ? merged.completionModelConfigId.trim()
+        : '',
+      completionTriggerKey: merged.completionTriggerKey === 'ctrl-arrow-right' || merged.completionTriggerKey === 'alt-slash'
+        ? merged.completionTriggerKey
+        : DEFAULT_SETTINGS.completionTriggerKey
     }
   }
 

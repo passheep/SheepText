@@ -220,6 +220,17 @@ const reasoningOptions: SelectOption[] = [
   { value: 'off', label: '关闭 / 默认' }, { value: 'low', label: '低' },
   { value: 'medium', label: '中' }, { value: 'high', label: '高' }
 ]
+const completionModelOptions = computed<SelectOption[]>(() => [
+  { value: '', label: '使用默认模型', description: '沿用「默认模型」设置' },
+  ...modelsDraft.value.map((model) => ({ value: model.id, label: model.name, description: model.modelId }))
+])
+
+const completionTriggerOptions: SelectOption[] = [
+  { value: 'alt-arrow-right', label: 'Alt + →' },
+  { value: 'ctrl-arrow-right', label: 'Ctrl + →' },
+  { value: 'alt-slash', label: 'Alt + /' }
+]
+
 const defaultModelOptions = computed<SelectOption[]>(() => [
   { value: '__none__', label: '不设默认模型' },
   ...modelsDraft.value.map((model) => ({ value: model.id, label: model.name, description: model.modelId }))
@@ -436,6 +447,17 @@ function cleanError(error: unknown): string {
                 </section>
 
                 <section class="settings-section">
+                  <div class="section-title"><Sparkles :size="19" /><div><h3>AI 补全</h3><p>在 Markdown 编辑区按触发键，由模型续写光标处的内容。</p></div></div>
+                  <div class="setting-rows">
+                    <label class="setting-row"><span><strong>启用 AI 补全</strong><small>补全会持续产生 token 消耗，默认关闭</small></span><ToggleSwitch v-model="settingsDraft.completionEnabled" /></label>
+                    <div v-if="settingsDraft.completionEnabled" class="setting-rows nested-settings">
+                      <label class="setting-row"><span><strong>补全模型</strong><small>建议选用支持 FIM 的模型（如 DeepSeek），否则可能没有结果</small></span><BaseSelect v-model="settingsDraft.completionModelConfigId" :options="completionModelOptions" /></label>
+                      <label class="setting-row"><span><strong>触发按键</strong><small>接受建议按 →，丢弃按 Esc 或直接继续输入</small></span><BaseSelect v-model="settingsDraft.completionTriggerKey" :options="completionTriggerOptions" /></label>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="settings-section">
                   <div class="section-title"><MonitorCog :size="19" /><div><h3>桌面行为</h3><p>应用始终保留托盘入口，窗口行为由你决定。</p></div></div>
                   <div class="setting-rows">
                     <label class="setting-row"><span><strong>开机自启</strong><small>默认静默进入托盘，不抢占当前应用焦点</small></span><ToggleSwitch v-model="settingsDraft.autoLaunch" /></label>
@@ -614,4 +636,7 @@ function cleanError(error: unknown): string {
 .usage-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:16px}
 .usage-warn-text{margin-right:auto;color:var(--text-secondary);font-size:11px}
 @media(max-width:760px){.usage-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.usage-row{grid-template-columns:minmax(0,1.4fr) repeat(3,minmax(0,1fr))}.usage-row>span:nth-child(5),.usage-row>span:nth-child(6),.usage-row>span:nth-child(7){display:none}}
+
+/* AI 补全的从属设置：开启后才出现，用左侧竖线表示层级 */
+.nested-settings{margin-top:2px;padding-left:12px;border-left:2px solid var(--border)}
 </style>

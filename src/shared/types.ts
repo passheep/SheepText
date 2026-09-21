@@ -95,6 +95,12 @@ export interface AppSettings {
   editorPattern: EditorPattern
   /** 编辑器字体族；空字符串表示使用内置默认字体栈。 */
   editorFont: string
+  /** 是否启用 Markdown 行内补全（灰字）；默认关闭，由用户主动开启。 */
+  completionEnabled: boolean
+  /** 补全专用模型；空字符串表示沿用「默认模型」。 */
+  completionModelConfigId: string
+  /** 补全触发按键。 */
+  completionTriggerKey: CompletionTriggerKey
 }
 
 export interface WindowRecord {
@@ -175,6 +181,24 @@ export interface AiRequest {
     from: number
     to: number
   }
+}
+
+/** 补全触发键预设。 */
+export type CompletionTriggerKey = 'alt-arrow-right' | 'ctrl-arrow-right' | 'alt-slash'
+
+/** 行内补全请求；prefix / suffix 为光标前后的文本。 */
+export interface AiCompletionRequest {
+  requestId: string
+  windowId: string
+  modelConfigId: string
+  prefix: string
+  suffix: string
+}
+
+/** 行内补全结果；失败时 text 为空字符串（按需求静默失败，原因记入用量统计）。 */
+export interface AiCompletionResult {
+  requestId: string
+  text: string
 }
 
 export interface AiResult {
@@ -332,6 +356,8 @@ export interface SheepTextApi {
   testModel: (input: ModelConfigInput, kind: 'connection' | 'generation') => Promise<ConnectionTestResult>
   runEnhance: (request: AiRequest) => Promise<AiResult>
   cancelEnhance: (requestId: string) => Promise<void>
+  runCompletion: (request: AiCompletionRequest) => Promise<AiCompletionResult>
+  cancelCompletion: (requestId: string) => Promise<void>
   queryTokenUsage: (query: TokenUsageQuery) => Promise<TokenUsageResult>
   clearTokenUsage: () => Promise<void>
   getSettings: () => Promise<AppSettings>
