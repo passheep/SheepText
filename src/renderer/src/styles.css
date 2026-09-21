@@ -705,9 +705,10 @@
 .sheep-milkdown-editor .ProseMirror{padding-right:72px;padding-left:72px}
 .milkdown-editor-shell.has-line-numbers .sheep-milkdown-editor .ProseMirror{padding-left:92px}
 .sheep-milkdown-editor .milkdown-list-item-block li{gap:5px;color:var(--text-primary)}
-/* 标记与正文第一行采用相同字体、行高及上下留白，不按整段高度居中。 */
-.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper{width:20px;height:calc(var(--milkdown-font-size,15px) * 1.78 + 4px);font:inherit;color:var(--text-primary);flex-shrink:0}
-.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper>.label{display:flex;align-items:center;justify-content:flex-end;width:20px;height:100%;padding:2px 0;font:inherit;line-height:1.78;color:var(--text-primary)}
+/* 标记与正文第一行采用相同字体、行高及上下留白，不按整段高度居中。
+   宽度用最小宽度而非固定值：序号位数变多（10. / 100.）时写死 20px 会把标记拆成两行。 */
+.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper{min-width:var(--sheep-list-label-width,2.5ch);width:auto;white-space:nowrap;height:calc(var(--milkdown-font-size,15px) * 1.78 + 4px);font:inherit;color:var(--text-primary);flex-shrink:0}
+.sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper>.label{display:flex;align-items:center;justify-content:flex-end;min-width:var(--sheep-list-label-width,2.5ch);width:auto;white-space:nowrap;height:100%;padding:2px 0;font:inherit;line-height:1.78;color:var(--text-primary)}
 .sheep-milkdown-editor .milkdown-list-item-block li>.label-wrapper svg{width:1em;height:1em;display:block;fill:var(--text-primary)}
 
 .sheep-milkdown-editor .milkdown-block-handle{gap:1px;margin-left:-6px}

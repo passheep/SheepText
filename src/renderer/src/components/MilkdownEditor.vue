@@ -243,6 +243,7 @@ onMounted(async () => {
       }
       updateSearchMatches()
       refreshOutline()
+      syncListLabelWidth()
       scheduleCursorSafetyUpdate()
     })
     listener.selectionUpdated((ctx, value) => {
@@ -275,6 +276,9 @@ onMounted(async () => {
     shell.value.addEventListener('wheel', onWheel, { passive: false })
     shell.value.addEventListener('scroll', onScroll, { passive: true })
     shell.value.addEventListener('keydown', onSearchShortcut, true)
+    syncListLabelWidth()
+    // 自选字体可能晚于首次渲染才加载完成，加载后再量一次
+    void document.fonts?.ready.then(() => syncListLabelWidth())
 
     emitSelection()
   } catch (error) {
@@ -311,11 +315,44 @@ watch(() => props.modelValue, (value) => {
 
 watch(() => props.fontSize, (size) => {
   localFontSize = size
+  // 字号变化后重新量一次序号列宽度
+  requestAnimationFrame(syncListLabelWidth)
 })
 
 watch(() => props.readonly, (value) => crepe?.setReadonly(Boolean(value)))
 watch([searchText, matchCase, wholeWord, useRegex, selectionOnly], updateSearchMatches)
 watch(replaceOpen, () => nextTick(() => (replaceOpen.value ? replaceInput.value : findInput.value)?.focus({ preventScroll: true })))
+
+// 序号列宽度按当前字体实测：不同字体的数字与点号宽度差异很大（宋体/黑体/楷体/仿宋
+// 的点号是半宽全角，需要约 3ch；默认字体、微软雅黑、Arial 只要约 2.4ch），
+// 写死固定值会让两位序号（10.）撑开或换行，导致序号与内容缩进参差。
+const LIST_LABEL_MIN_WIDTH = 20
+let listLabelProbe: HTMLSpanElement | null = null
+let listLabelSignature = ''
+
+function syncListLabelWidth(): void {
+  const source = shell.value?.querySelector('.ProseMirror')
+  if (!source) return
+  const style = getComputedStyle(source)
+  const signature = `${style.fontFamily}|${style.fontSize}|${style.fontWeight}`
+  // 字体没变就不用重量（每次正文更新都会调到这里）
+  if (signature === listLabelSignature && listLabelProbe) return
+  if (!listLabelProbe) {
+    listLabelProbe = document.createElement('span')
+    listLabelProbe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;pointer-events:none'
+    // 用「99.」代表两位序号的最宽情形（9 是最宽数字）
+    listLabelProbe.textContent = '99.'
+  }
+  listLabelProbe.style.fontFamily = style.fontFamily
+  listLabelProbe.style.fontSize = style.fontSize
+  listLabelProbe.style.fontWeight = style.fontWeight
+  shell.value?.appendChild(listLabelProbe)
+  const width = Math.ceil(listLabelProbe.getBoundingClientRect().width)
+  listLabelProbe.remove()
+  if (!width) return
+  listLabelSignature = signature
+  shell.value?.style.setProperty('--sheep-list-label-width', `${Math.max(LIST_LABEL_MIN_WIDTH, width)}px`)
+}
 
 async function uploadImage(file: File): Promise<string> {
   try {
