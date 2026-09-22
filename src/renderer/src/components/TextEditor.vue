@@ -1049,8 +1049,11 @@ onMounted(() => {
           event.preventDefault()
           const range = editorView.state.selection.main
           editorView.dispatch(editorView.state.replaceSelection(text))
-          // 上报本次粘贴范围与文本，供底部“保留原格式/清除格式”操作区使用
-          emit('pasted', { from: range.from, to: range.from + text.length }, text)
+          // TXT 模式没有富文本，只有粘贴内容里带 Markdown 标记时「清除格式」才有意义。
+          // 纯文本粘贴不弹提示，否则按钮按下去什么都不会变，提示反而成了噪声。
+          if (stripPasteMarkdown(text) !== text) {
+            emit('pasted', { from: range.from, to: range.from + text.length }, text)
+          }
           return true
         },
         focus() { emit('focusChange', true); return false },

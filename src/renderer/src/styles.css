@@ -933,3 +933,9 @@
 /* ---- AI 行内补全灰字 ---- */
 /* 只读提示：不参与选区、不响应鼠标、不换行；颜色跟随主题的弱化文字色 */
 .sheep-completion-ghost{color:var(--text-tertiary);pointer-events:none;user-select:none;-webkit-user-select:none;white-space:pre-wrap;opacity:.85}
+
+/* AI 补全提示条：复用粘贴提示条的外观，多一段建议预览与按键提示 */
+.completion-notice{max-width:min(560px,92vw)}
+.completion-notice-preview{max-width:230px;overflow:hidden;color:var(--text-secondary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.completion-notice-hint{color:var(--text-tertiary);font-size:10px;white-space:nowrap}
+.completion-notice-hint kbd{display:inline-grid;place-items:center;min-width:17px;height:17px;margin:0 2px;padding:0 4px;border:1px solid var(--border-strong);border-radius:5px;background:var(--field-bg);color:var(--text-secondary);font:650 10px var(--font-ui)}

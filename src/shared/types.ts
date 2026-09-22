@@ -101,6 +101,8 @@ export interface AppSettings {
   completionModelConfigId: string
   /** 补全触发按键。 */
   completionTriggerKey: CompletionTriggerKey
+  /** 自动补全：停止输入一小段时间后自动请求补全（模仿 Copilot）。 */
+  completionAutoEnabled: boolean
 }
 
 export interface WindowRecord {

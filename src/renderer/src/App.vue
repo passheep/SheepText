@@ -31,6 +31,7 @@ type EditorExpose = {
   openSearch: () => void
   clearPasteFormat: (from: number, to: number) => boolean
   clearCompletion: () => boolean
+  acceptCompletion: () => boolean
 }
 
 // 粘贴格式临时操作区状态：记录本次粘贴范围，超时或新编辑后失效
@@ -120,6 +121,22 @@ function hidePasteNotice(): void {
   pasteNotice.value = null
 }
 
+// 补全提示条：灰字出现时在底部提示「按 → 采用」，也可以直接点按钮
+const completionNotice = ref<{ preview: string } | null>(null)
+
+function onCompletionChange(state: { active: boolean; preview: string }): void {
+  completionNotice.value = state.active ? { preview: state.preview } : null
+}
+
+function acceptCompletion(): void {
+  if (editor.value?.acceptCompletion()) completionNotice.value = null
+}
+
+function dismissCompletion(): void {
+  editor.value?.clearCompletion()
+  completionNotice.value = null
+}
+
 function onPasted(range: { from: number; to: number }, text: string): void {
   if (!draft.value || !text.trim() || range.to <= range.from) {
     hidePasteNotice()
@@ -203,7 +220,7 @@ const booting = ref(true)
 const draft = ref<Draft | null>(null)
 const settings = ref<AppSettings | null>(null)
 const models = ref<ModelConfigPublic[]>([])
-const appVersion = ref('0.4.2')
+const appVersion = ref('0.5.0')
 const encryptionAvailable = ref(true)
 const editor = ref<EditorExpose | null>(null)
 const tabBar = ref<{ revealActive: () => Promise<void> } | null>(null)
@@ -520,7 +537,8 @@ function createSettingsSnapshot(source: AppSettings): AppSettings {
     editorFont: String(source.editorFont ?? ''),
     completionEnabled: Boolean(source.completionEnabled),
     completionModelConfigId: String(source.completionModelConfigId ?? ''),
-    completionTriggerKey: source.completionTriggerKey
+    completionTriggerKey: source.completionTriggerKey,
+    completionAutoEnabled: Boolean(source.completionAutoEnabled)
   }
 }
 
@@ -1282,8 +1300,10 @@ function cleanError(error: unknown): string {
               :draft-id="draft.id"
               :window-id="windowId"
               :completion-enabled="settings.completionEnabled"
+              :completion-auto-enabled="settings.completionAutoEnabled"
               :completion-model-id="completionModelId"
               :completion-trigger="settings.completionTriggerKey"
+              @completion-change="onCompletionChange"
               @update:model-value="onContentChanged"
               @selection-change="onSelectionChanged"
               @focus-change="editorFocused = $event"
@@ -1326,6 +1346,16 @@ function cleanError(error: unknown): string {
             <span class="paste-notice-label">粘贴：{{ pasteNotice.cleared ? '已清除格式' : '保留原格式' }}</span>
             <button v-if="!pasteNotice.cleared" type="button" @click="clearPastedFormat">清除格式</button>
             <button type="button" class="paste-notice-close" title="关闭" @click="keepPastedFormat"><X :size="13" /></button>
+          </div>
+
+          <!-- AI 补全提示条：灰字存在时显示，提示可按 → 采用，也可直接点按钮 -->
+          <div v-if="completionNotice" class="paste-notice completion-notice no-drag" @keydown.esc="dismissCompletion">
+            <Sparkles :size="15" />
+            <span class="paste-notice-label">AI 补全</span>
+            <span class="completion-notice-preview">{{ completionNotice.preview }}{{ completionNotice.preview.length >= 40 ? '…' : '' }}</span>
+            <span class="completion-notice-hint">按 <kbd>→</kbd> 采用</span>
+            <button type="button" @click="acceptCompletion">采用</button>
+            <button type="button" class="paste-notice-close" title="丢弃（Esc）" @click="dismissCompletion"><X :size="13" /></button>
           </div>
         </Transition>
 

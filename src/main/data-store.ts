@@ -293,7 +293,8 @@ export class DataStore {
         : '',
       completionTriggerKey: merged.completionTriggerKey === 'ctrl-arrow-right' || merged.completionTriggerKey === 'alt-slash'
         ? merged.completionTriggerKey
-        : DEFAULT_SETTINGS.completionTriggerKey
+        : DEFAULT_SETTINGS.completionTriggerKey,
+      completionAutoEnabled: booleanValue(merged.completionAutoEnabled, DEFAULT_SETTINGS.completionAutoEnabled)
     }
   }
 

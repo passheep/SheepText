@@ -12,6 +12,7 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@milkdown/kit/pro
 import { callCommand, getMarkdown, replaceAll, replaceRange as replaceMarkdownRange } from '@milkdown/kit/utils'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ListTree } from '@lucide/vue'
+import { stripPasteMarkdown } from '../../../shared/paste-format'
 import type { CompletionTriggerKey, ToastPayload } from '../../../shared/types'
 
 const props = defineProps<{
@@ -22,6 +23,7 @@ const props = defineProps<{
   /** 已解析好的补全模型 ID（补全模型为空时由上层回退到默认模型）；空串表示未配置。 */
   completionModelId: string
   completionEnabled: boolean
+  completionAutoEnabled: boolean
   completionTrigger: CompletionTriggerKey
   readonly?: boolean
 }>()
@@ -37,6 +39,7 @@ const emit = defineEmits<{
   pasted: [range: { from: number; to: number }, text: string]
   pasteInvalidated: []
   outlineHold: [value: boolean]
+  completionChange: [state: { active: boolean; preview: string }]
 }>()
 
 // ---- AI 行内补全（灰字） ----
@@ -46,6 +49,8 @@ const COMPLETION_PREFIX_LIMIT = 2000
 const COMPLETION_SUFFIX_LIMIT = 500
 // 灰字最长字符数；需求定为「一句或一段」，超出容易被模型带偏
 const COMPLETION_MAX_CHARS = 200
+// 自动补全：停止输入多久后请求；太短会在打字途中反复请求，太长又会显得迟钝
+const COMPLETION_AUTO_DELAY_MS = 900
 
 /** 灰字插件状态；from 为插入位置（ProseMirror 位置，非字符偏移）。 */
 type CompletionState = {
@@ -133,8 +138,8 @@ const outlineItems = ref<OutlineItem[]>([])
 let outlineCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 // 只记录当前文档的最近一次粘贴；后续正文事务立即使旧范围失效。
-let lastPasteRange: { from: number; to: number; doc: ProseMirrorNode } | null = null
-let pendingPaste: { from: number; to: number } | null = null
+let lastPasteRange: { from: number; to: number; text: string; doc: ProseMirrorNode } | null = null
+let pendingPaste: { from: number; to: number; formatted: boolean } | null = null
 // 粘贴事件到粘贴事务之间的容差；超过该时长未产生事务就丢弃，避免误认到后续输入上
 const PASTE_PENDING_TTL_MS = 600
 
@@ -143,6 +148,12 @@ let editorView: EditorView | null = null
 let searchDecorations = DecorationSet.empty
 // 在途补全的请求 ID；不为空说明有一个请求未结束，切文稿/失焦时需要取消
 let activeCompletionId: string | null = null
+// 自动补全的待触发定时器
+let autoCompletionTimer: ReturnType<typeof setTimeout> | null = null
+// 输入法组合中标记：组合期间不自动请求补全
+let composing = false
+// 刚接受过补全：抑制一次自动触发，否则接受带来的文档变化会立刻再请求一轮
+let suppressAutoOnce = false
 let selectionScope: { from: number; to: number } | null = null
 let syncingScroll = false
 let localFontSize = props.fontSize
@@ -284,6 +295,29 @@ onMounted(async () => {
             return value
           }
         },
+        view() {
+          return {
+            update(view, prevState) {
+              const previous = completionKey.getState(prevState)
+              const current = completionKey.getState(view.state)
+              // 灰字的出现与消失都在这里统一对外通知：
+              // 用户输入会让插件 apply 直接把状态清成 idle，那条路径发不出事件。
+              if (previous?.status !== current?.status || previous?.text !== current?.text) {
+                const active = current?.status === 'ready' && Boolean(current.text)
+                emit('completionChange', { active, preview: active ? current.text.slice(0, 40) : '' })
+              }
+              if (view.state.doc.eq(prevState.doc)) {
+                return
+              }
+              // 刚接受过补全：本次文档变化来自接受，跳过一轮自动触发
+              if (suppressAutoOnce) {
+                suppressAutoOnce = false
+                return
+              }
+              scheduleAutoCompletion(view)
+            }
+          }
+        },
         props: {
           decorations(state) {
             const value = completionKey.getState(state)
@@ -316,26 +350,44 @@ onMounted(async () => {
       new Plugin({
         appendTransaction(transactions, oldState, state) {
           if (!transactions.some((transaction) => transaction.docChanged)) return null
-          // Milkdown 会在 HTML 粘贴后补写标题 ID；该元数据变化不应取消粘贴提示。
-          if (lastPasteRange?.doc === oldState.doc && withoutHeadingIds(oldState.doc).eq(withoutHeadingIds(state.doc))) {
-            lastPasteRange.doc = state.doc
-            return null
-          }
-          lastPasteRange = null
-          emit('pasteInvalidated')
-          const range = pendingPaste
+          const pending = pendingPaste
           pendingPaste = null
-          if (!range) return null
-          for (const transaction of transactions) {
-            range.from = transaction.mapping.map(range.from, -1)
-            range.to = transaction.mapping.map(range.to, 1)
+          const incoming = pending ? mapRangeThrough(transactions, pending) : null
+
+          // 已有粘贴提示：只要粘贴进来的文字原样还在，就只是 Milkdown 自己的规范化事务
+          // （列表组件、标题 ID 等）在改文档，不该把提示取消掉。
+          // 原先要求“文档完全未变”才显示提示，会被这类事务误伤。
+          if (lastPasteRange) {
+            const mapped = mapRangeThrough(transactions, lastPasteRange)
+            const textNow = state.doc.textBetween(mapped.from, mapped.to, '\n')
+            // 规范化事务常在粘贴内容后补一个空段落，使区间与文字各多出一截；
+            // 比较时忽略首尾空白，否则正常的粘贴会被误判成「用户改了内容」而取消提示。
+            if (textNow.trim() && textNow.trim() === lastPasteRange.text.trim()) {
+              lastPasteRange.from = mapped.from
+              lastPasteRange.to = mapped.to
+              lastPasteRange.text = textNow
+              lastPasteRange.doc = state.doc
+              if (!incoming) return null
+            } else {
+              lastPasteRange = null
+              emit('pasteInvalidated')
+            }
           }
-          const snapshot = { ...range, doc: state.doc }
+
+          if (!incoming) return null
+          // 只有真的带格式才提示：纯文本粘贴时「清除格式」按下去什么都不会变，
+          // 提示反而成了噪声。判定在粘贴那一刻就做好了（见 clipboardHasFormat）。
+          if (!incoming.formatted) return null
+          const pastedText = state.doc.textBetween(incoming.from, incoming.to, '\n')
+          if (!pastedText.trim() || incoming.to <= incoming.from) return null
+          const snapshot = { from: incoming.from, to: incoming.to, text: pastedText, doc: state.doc }
           lastPasteRange = snapshot
-          // 等待正文更新回调完成后显示提示，避免提示被本次粘贴自身误清除。
-          setTimeout(() => {
-            if (lastPasteRange !== snapshot || editorView?.state.doc !== snapshot.doc) return
-            emit('pasted', range, state.doc.textBetween(range.from, range.to, '\n'))
+          // 必须等正文更新回调跑完再提示：粘贴会让 App.vue 的 onContentChanged 先清一次提示，
+          // 立即 emit 会被它当场清掉。期间若用户改动了粘贴内容，上面的检查已把
+          // lastPasteRange 置空（或换成新对象），这里就不会再提示。
+          window.setTimeout(() => {
+            if (lastPasteRange !== snapshot) return
+            emit('pasted', { from: snapshot.from, to: snapshot.to }, snapshot.text)
           }, 250)
           return null
         }
@@ -483,21 +535,65 @@ async function uploadImage(file: File): Promise<string> {
 }
 
 // 比较正文时仅忽略自动生成的标题 ID，其他节点属性、标记及文字仍严格比较。
-function withoutHeadingIds(node: ProseMirrorNode): ProseMirrorNode {
-  if (node.isLeaf) return node
-  const children: ProseMirrorNode[] = []
-  node.forEach((child) => children.push(withoutHeadingIds(child)))
-  const attrs = node.type.name === 'heading' ? { ...node.attrs, id: '' } : node.attrs
-  return node.type.create(attrs, Fragment.fromArray(children), node.marks)
-}
 
 // 捕获阶段只记录选区，不阻断原生粘贴，避免其他插件先消费 HTML 后漏记。
+/** 把一个位置区间依次过一遍事务映射，得到它在当前文档中的位置；附加字段原样保留。 */
+function mapRangeThrough<T extends { from: number; to: number }>(
+  transactions: readonly Transaction[],
+  range: T
+): T {
+  let from = range.from
+  let to = range.to
+  for (const transaction of transactions) {
+    from = transaction.mapping.map(from, -1)
+    to = transaction.mapping.map(to, 1)
+  }
+  return { ...range, from, to }
+}
+
+/** 这些标签出现即认为粘贴内容带格式（标题、列表、表格、代码、引用、链接、强调等）。 */
+const FORMATTING_TAGS = [
+  'strong', 'b', 'em', 'i', 'u', 's', 'del', 'code', 'a', 'mark', 'sub', 'sup',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'table', 'blockquote', 'pre', 'img', 'hr'
+].join(',')
+
+/**
+ * 判断剪贴板内容是否真的带可清除的格式。
+ * 在粘贴那一刻判定，而不是事后去看文档区间：粘贴会整段替换当前空段落，
+ * 事后的位置区间可能落空（实测取不到刚插入的列表节点），导致提示漏报。
+ */
+function clipboardHasFormat(data: DataTransfer): boolean {
+  const plain = data.getData('text/plain') ?? ''
+  // 纯文本里带 Markdown 标记：Milkdown 会解析成结构，「清除格式」有意义
+  if (stripPasteMarkdown(plain) !== plain) return true
+  const html = data.getData('text/html') ?? ''
+  if (!html.trim()) return false
+  try {
+    const body = new DOMParser().parseFromString(html, 'text/html').body
+    if (body.querySelector(FORMATTING_TAGS)) return true
+    // Word、网页复制时常用行内样式表达加粗/斜体/下划线，没有语义标签
+    return Array.from(body.querySelectorAll('[style]')).some((element) => {
+      const style = (element as HTMLElement).style
+      const weight = style.fontWeight === 'bold' ? 700 : Number(style.fontWeight) || 0
+      const decoration = style.textDecorationLine || style.textDecoration || ''
+      return weight >= 600 || style.fontStyle === 'italic'
+        || decoration.includes('underline') || decoration.includes('line-through')
+    })
+  } catch {
+    return false
+  }
+}
+
 function onPasteCapture(event: ClipboardEvent): void {
   pendingPaste = null
   const data = event.clipboardData
   if (!editorView || props.readonly || !data || editorView.state.selection.$from.parent.type.spec.code) return
   if ((event.target as Element)?.closest('.cm-editor') || Array.from(data.items).some((item) => item.kind === 'file')) return
-  const snapshot = { from: editorView.state.selection.from, to: editorView.state.selection.to }
+  const snapshot = {
+    from: editorView.state.selection.from,
+    to: editorView.state.selection.to,
+    formatted: clipboardHasFormat(data)
+  }
   pendingPaste = snapshot
   // 粘贴事务可能比 paste 事件晚几毫秒到达，不能用微任务立即清理，
   // 否则 appendTransaction 取不到范围，底部「保留原格式 / 清除格式」提示就不会出现。
@@ -505,10 +601,13 @@ function onPasteCapture(event: ClipboardEvent): void {
 }
 
 function onCompositionStart(): void {
+  composing = true
+  cancelAutoCompletion()
   emit('compositionChange', true)
 }
 
 function onCompositionEnd(): void {
+  composing = false
   emit('compositionChange', false)
   // U02：一次输入法提交切成一步撤销。
   // ProseMirror 默认按 500ms 合并历史，中文连打会被并成一整段；
@@ -979,8 +1078,36 @@ function buildCompletionContext(view: EditorView): { prefix: string; suffix: str
   }
 }
 
+
+/** 取消待触发的自动补全（输入继续、失焦、清除灰字时调用）。 */
+function cancelAutoCompletion(): void {
+  if (autoCompletionTimer) {
+    clearTimeout(autoCompletionTimer)
+    autoCompletionTimer = null
+  }
+}
+
+/** 停止输入后自动请求补全；模仿 Copilot 的「打字停顿即提示」。 */
+function scheduleAutoCompletion(view: EditorView): void {
+  cancelAutoCompletion()
+  if (!props.completionEnabled || !props.completionAutoEnabled) return
+  if (view.state.selection.from !== view.state.selection.to) return
+  // 输入法组合期间不请求：中文打字中途的中间态没有补全价值，还会浪费 token
+  if (composing) return
+  const $from = view.state.selection.$from
+  // 代码块里补全意义不大，且容易与代码语义冲突
+  if ($from.parent.type.spec.code) return
+  autoCompletionTimer = setTimeout(() => {
+    autoCompletionTimer = null
+    if (editorView !== view || !view.hasFocus()) return
+    if (view.state.selection.from !== view.state.selection.to) return
+    void triggerCompletion(view)
+  }, COMPLETION_AUTO_DELAY_MS)
+}
+
 /** 取消在途请求并抹掉灰字；返回是否真的清掉了东西（用于决定是否拦截按键）。 */
 function clearCompletion(): boolean {
+  cancelAutoCompletion()
   if (activeCompletionId) {
     void window.sheepText.cancelCompletion(activeCompletionId)
     activeCompletionId = null
@@ -993,12 +1120,20 @@ function clearCompletion(): boolean {
 }
 
 /** 接受灰字：作为一次普通事务插入，可被 Ctrl+Z 撤销。 */
-function acceptCompletion(view: EditorView): boolean {
-  const current = completionKey.getState(view.state)
+function acceptCompletion(view?: EditorView): boolean {
+  // 键盘路径传入 view；底部提示条的「采用」按钮从组件外部调用，不传参，
+  // 此时回退到当前编辑器实例，否则会在 view.state 上抛错、按钮点了没反应。
+  const target = view ?? editorView
+  if (!target) return false
+  const current = completionKey.getState(target.state)
   if (!current || current.status !== 'ready' || !current.text || current.from === null) return false
-  const transaction = view.state.tr.insertText(current.text, current.from)
+  // 必须先置抑制标记再 dispatch：dispatch 会同步触发 view.update，
+  // 那里看到标记才会跳过自动补全，否则接受完会立刻又请求一轮。
+  suppressAutoOnce = true
+  cancelAutoCompletion()
+  const transaction = target.state.tr.insertText(current.text, current.from)
   transaction.setMeta(completionKey, COMPLETION_IDLE)
-  view.dispatch(transaction)
+  target.dispatch(transaction)
   return true
 }
 
@@ -1044,7 +1179,7 @@ async function triggerCompletion(view: EditorView): Promise<void> {
   }
 }
 
-defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio, clearPasteFormat, clearCompletion })
+defineExpose({ focus, openSearch, replaceRange, undoOnce, redoOnce, setScrollRatio, clearPasteFormat, clearCompletion, acceptCompletion })
 </script>
 
 <template>

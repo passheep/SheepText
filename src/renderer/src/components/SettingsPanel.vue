@@ -450,9 +450,12 @@ function cleanError(error: unknown): string {
                   <div class="section-title"><Sparkles :size="19" /><div><h3>AI 补全</h3><p>在 Markdown 编辑区按触发键，由模型续写光标处的内容。</p></div></div>
                   <div class="setting-rows">
                     <label class="setting-row"><span><strong>启用 AI 补全</strong><small>补全会持续产生 token 消耗，默认关闭</small></span><ToggleSwitch v-model="settingsDraft.completionEnabled" /></label>
-                    <div v-if="settingsDraft.completionEnabled" class="setting-rows nested-settings">
-                      <label class="setting-row"><span><strong>补全模型</strong><small>建议选用支持 FIM 的模型（如 DeepSeek），否则可能没有结果</small></span><BaseSelect v-model="settingsDraft.completionModelConfigId" :options="completionModelOptions" /></label>
-                      <label class="setting-row"><span><strong>触发按键</strong><small>接受建议按 →，丢弃按 Esc 或直接继续输入</small></span><BaseSelect v-model="settingsDraft.completionTriggerKey" :options="completionTriggerOptions" /></label>
+                    <div v-if="settingsDraft.completionEnabled" class="completion-options">
+                      <label class="setting-row"><span><strong>自动补全</strong><small>停止输入后自动请求，无需按触发键</small></span><ToggleSwitch v-model="settingsDraft.completionAutoEnabled" /></label>
+                      <div class="settings-grid">
+                        <label class="field-block"><span>补全模型</span><BaseSelect v-model="settingsDraft.completionModelConfigId" :options="completionModelOptions" /></label>
+                        <label class="field-block"><span>触发按键</span><BaseSelect v-model="settingsDraft.completionTriggerKey" :options="completionTriggerOptions" /></label>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -638,5 +641,6 @@ function cleanError(error: unknown): string {
 @media(max-width:760px){.usage-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.usage-row{grid-template-columns:minmax(0,1.4fr) repeat(3,minmax(0,1fr))}.usage-row>span:nth-child(5),.usage-row>span:nth-child(6),.usage-row>span:nth-child(7){display:none}}
 
 /* AI 补全的从属设置：开启后才出现，用左侧竖线表示层级 */
-.nested-settings{margin-top:2px;padding-left:12px;border-left:2px solid var(--border)}
+.completion-options{margin-top:2px;padding-left:12px;border-left:2px solid var(--border)}
+.completion-options .settings-grid{margin-top:10px}
 </style>

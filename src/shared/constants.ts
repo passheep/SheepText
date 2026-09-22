@@ -32,7 +32,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   completionEnabled: false,
   // 空字符串表示沿用「默认模型」
   completionModelConfigId: '',
-  completionTriggerKey: 'alt-arrow-right'
+  completionTriggerKey: 'alt-arrow-right',
+  // 自动补全会持续产生 token 消耗，同样默认关闭
+  completionAutoEnabled: false
 }
 
 export const SCENE_LABELS: Record<SceneId, string> = {
