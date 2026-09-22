@@ -1,6 +1,6 @@
 // 本地文件文稿：严格解码与路径身份归一，不在读取时隐式转换磁盘文件。
-import { stat, readFile, writeFile } from 'node:fs/promises'
-import { dirname, resolve, win32 } from 'node:path'
+import { stat, readFile, writeFile, readdir } from 'node:fs/promises'
+import { dirname, join, resolve, win32 } from 'node:path'
 
 export function displayModeForFile(filePath: string): 'txt' | 'markdown' {
   return /\.(md|markdown)$/i.test(filePath) ? 'markdown' : 'txt'
@@ -64,4 +64,19 @@ export async function writeTextFileUtf8(filePath: string, content: string): Prom
 
 export function fileDirectory(filePath: string): string {
   return dirname(filePath)
+}
+
+/**
+ * 文件夹面板用的同级文件列表：只扫当前目录，不递归子目录。
+ * 目录不存在或不可读时由调用方处理错误，这里不做兜底。
+ */
+export async function listSiblingDocuments(filePath: string): Promise<{ directory: string; files: Array<{ name: string; path: string }> }> {
+  const directory = dirname(filePath)
+  const entries = await readdir(directory, { withFileTypes: true })
+  const files = entries
+    .filter((entry) => entry.isFile() && /\.(txt|md|markdown)$/i.test(entry.name))
+    .map((entry) => ({ name: entry.name, path: join(directory, entry.name) }))
+    // 文件名按自然顺序排，让「第 2 章」排在「第 10 章」前面
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }))
+  return { directory, files }
 }

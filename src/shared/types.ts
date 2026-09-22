@@ -188,6 +188,21 @@ export interface AiRequest {
 /** 补全触发键预设。 */
 export type CompletionTriggerKey = 'alt-arrow-right' | 'ctrl-arrow-right' | 'alt-slash'
 
+/** 文件夹面板里的一个同级文件。 */
+export interface LocalFileEntry {
+  name: string
+  path: string
+  /** 是否为当前文稿对应的那个文件 */
+  isCurrent: boolean
+}
+
+/** 文件夹面板的目录列表结果。 */
+export interface LocalFileListResult {
+  /** 当前文件所在目录的绝对路径 */
+  directory: string
+  entries: LocalFileEntry[]
+}
+
 /** 行内补全请求；prefix / suffix 为光标前后的文本。 */
 export interface AiCompletionRequest {
   requestId: string
@@ -328,6 +343,8 @@ export interface SheepTextApi {
   getPathForFile: (file: File) => string
   /** 检查文件文稿是否被外部修改（窗口重新聚焦时调用） */
   checkExternalChange: (draftId: string) => Promise<{ changed: boolean; missing?: boolean; path?: string }>
+  /** 读取本地文件文稿所在目录的同级 txt/md 文件（文件夹面板用） */
+  listDirectoryFiles: (draftId: string) => Promise<LocalFileListResult>
   /** 外部修改处理：reload=重新读磁盘，keep=内存版本覆盖磁盘 */
   resolveExternalChange: (draftId: string, action: 'reload' | 'keep', input: DraftSaveInput) => Promise<{ draft: Draft }>
   createDraft: (windowId: string) => Promise<Draft>

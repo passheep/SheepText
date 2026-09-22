@@ -14,6 +14,8 @@ type Ports = {
   createWindow: (draftId: string) => Promise<string>
   /** 在指定窗口作为新标签打开，窗口不存在或标签已满时返回 false */
   openTab?: (windowId: string, draftId: string) => boolean
+  /** 标签列表变化后通知该窗口渲染层刷新 */
+  notifyTabs?: (windowId: string) => void
   toast: (draftId: string, payload: ToastPayload) => void
 }
 export type OpenLocalFileResult = {
@@ -57,6 +59,10 @@ export class FileDraftService {
         await this.checkUnlocked(draft)
         const opened = this.store.getOpenWindowForDraft(draft.id)
         if (opened && this.ports.activateWindow(opened.id)) {
+          // 文件已在某个窗口打开：把那个窗口提到前台，并把活动标签切过去，
+          // 否则点击已在标签中的文件（如文件夹面板里重复点同一个文件）会没有任何反应。
+          this.ports.openTab?.(opened.id, draft.id)
+          this.ports.notifyTabs?.(opened.id)
           return { opened: true, windowId: opened.id, draft, reused: true }
         }
         return { opened: true, draft, ...await this.placeDraft(draft.id, targetWindowId) }

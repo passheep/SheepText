@@ -13,6 +13,7 @@ import type {
 import AiResultPanel from './components/AiResultPanel.vue'
 import type { SelectOption } from './components/BaseSelect.vue'
 import BaseButton from './components/BaseButton.vue'
+import FolderPanel from './components/FolderPanel.vue'
 import HistoryDrawer from './components/HistoryDrawer.vue'
 import IconButton from './components/IconButton.vue'
 import MilkdownEditor from './components/MilkdownEditor.vue'
@@ -220,7 +221,7 @@ const booting = ref(true)
 const draft = ref<Draft | null>(null)
 const settings = ref<AppSettings | null>(null)
 const models = ref<ModelConfigPublic[]>([])
-const appVersion = ref('0.5.0')
+const appVersion = ref('0.5.2')
 const encryptionAvailable = ref(true)
 const editor = ref<EditorExpose | null>(null)
 const tabBar = ref<{ revealActive: () => Promise<void> } | null>(null)
@@ -237,6 +238,11 @@ const alwaysOnTop = ref(false)
 const isDocked = ref(false)
 const dockSide = ref<DockSide>(null)
 const isCollapsed = ref(false)
+const folderOpen = ref(false)
+// 点击后常驻；未常驻时鼠标移开自动收起（与右上角大纲按钮同一套交互）
+const folderPinned = ref(false)
+const folderPanelRef = ref<InstanceType<typeof FolderPanel> | null>(null)
+let folderCloseTimer: ReturnType<typeof setTimeout> | null = null
 const historyOpen = ref(false)
 const historyPinned = ref(false)
 const historyHeld = ref(false)
@@ -312,7 +318,7 @@ const interactionState = computed<WindowInteractionState>(() => ({
   interacting: editorFocused.value,
   composing: isComposing.value,
   drawerOpen: historyOpen.value,
-  menuOpen: newMenuOpen.value || sceneMenuOpen.value || openSelectCount.value > 0 || settingsOpen.value || Boolean(pasteNotice.value) || dragFileActive.value || Boolean(externalConflict.value) || outlineHeld.value,
+  menuOpen: newMenuOpen.value || sceneMenuOpen.value || openSelectCount.value > 0 || settingsOpen.value || Boolean(pasteNotice.value) || dragFileActive.value || Boolean(externalConflict.value) || outlineHeld.value || folderOpen.value,
   aiPreviewOpen: ai.open
 }))
 
@@ -343,6 +349,57 @@ function handleDragLeave(event: DragEvent): void {
   if (dragFileDepth === 0) dragFileActive.value = false
 }
 
+/**
+ * 在当前窗口打开本地文件作为新标签（拖入、文件夹面板共用）。
+ * 标签已满时主进程会开新窗口；文件已在其他窗口打开时主进程会激活那个窗口。
+ */
+async function openLocalFileInWindow(path: string): Promise<void> {
+  try {
+    const result = await window.sheepText.openLocalFile(path)
+    if (result.convertedFromGbk) showToast({ type: 'info', message: '文件原为 GBK 编码，已按 UTF-8 打开，保存时将转换' })
+    if (result.openedInNewWindow === false) {
+      const state = await window.sheepText.windowTabs(windowId)
+      tabs.value = state.tabs
+      setCurrentDraft(state.draft)
+      await nextTick()
+      await tabBar.value?.revealActive()
+      return
+    }
+    // reused：文件已在其他窗口打开，主进程已把那个窗口激活，这里不提示
+    if (result.reused) return
+    showToast({ type: 'info', message: '当前窗口标签已满，已在新窗口打开文件' })
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  }
+}
+
+// 文件夹面板：悬停临时展开，点击固定，再次点击取消并收起（与右上角大纲一致）
+function handleFolderEnter(): void {
+  if (folderCloseTimer) { clearTimeout(folderCloseTimer); folderCloseTimer = null }
+  const wasOpen = folderOpen.value
+  folderOpen.value = true
+  // 已经展开时再次悬停（例如刚在资源管理器里新建了文件）也重读一次目录；
+  // 首次展开由组件的 onMounted 自己加载。
+  if (wasOpen) void folderPanelRef.value?.refresh()
+}
+
+function handleFolderLeave(): void {
+  if (folderCloseTimer) clearTimeout(folderCloseTimer)
+  if (folderPinned.value) return
+  folderCloseTimer = setTimeout(() => { folderOpen.value = false }, 220)
+}
+
+function toggleFolderPinned(): void {
+  if (folderPinned.value) closeFolder()
+  else { folderPinned.value = true; handleFolderEnter() }
+}
+
+function closeFolder(): void {
+  if (folderCloseTimer) clearTimeout(folderCloseTimer)
+  folderPinned.value = false
+  folderOpen.value = false
+}
+
 async function handleFileDrop(event: DragEvent): Promise<void> {
   if (!isFileDrag(event)) return
   event.preventDefault()
@@ -360,24 +417,7 @@ async function handleFileDrop(event: DragEvent): Promise<void> {
       showToast({ type: 'error', message: cleanError(error) })
     }
   }
-  for (const path of paths) {
-    try {
-      const result = await window.sheepText.openLocalFile(path)
-      if (result.convertedFromGbk) showToast({ type: 'info', message: '文件原为 GBK 编码，已按 UTF-8 打开，保存时将转换' })
-      // U07：拖入文件优先在当前窗口作为新标签；标签已满时主进程会开新窗口。
-      if (result.openedInNewWindow === false) {
-        const state = await window.sheepText.windowTabs(windowId)
-        tabs.value = state.tabs
-        setCurrentDraft(state.draft)
-        await nextTick()
-        await tabBar.value?.revealActive()
-      } else {
-        showToast({ type: 'info', message: '当前窗口标签已满，已在新窗口打开文件' })
-      }
-    } catch (error) {
-      showToast({ type: 'error', message: cleanError(error) })
-    }
-  }
+  for (const path of paths) await openLocalFileInWindow(path)
 }
 
 onMounted(async () => {
@@ -385,6 +425,12 @@ onMounted(async () => {
     const bootstrap = await window.sheepText.bootstrap(windowId)
     applyBootstrap(bootstrap)
     registerEvents()
+    // 订阅完成后再对齐一次标签：主进程可能在 bootstrap 快照与订阅之间打开新标签
+    // （例如右键一次打开多个文件），错过那一次通知也不会漏掉状态。
+    await window.sheepText.windowTabs(windowId).then((state) => {
+      tabs.value = state.tabs
+      if (draft.value?.id !== state.draft.id) setCurrentDraft(state.draft)
+    }).catch(() => undefined)
     await checkExternalOnFocus()
     await nextTick()
     window.addEventListener('focus', checkExternalOnFocus)
@@ -421,6 +467,8 @@ onBeforeUnmount(() => {
 })
 
 watch(() => [draft.value?.id, draft.value?.displayMode], hidePasteNotice)
+// 切到非本地文件文稿时收起文件夹面板，避免下次打开本地文件时莫名弹开
+watch(() => draft.value?.filePath, (path) => { if (!path) closeFolder() })
 watch(interactionState, (state) => window.sheepText.setInteractionState(windowId, state), { deep: true })
 // 普通文稿的标签标题取正文首行，编辑时同步刷新，避免标签长期停在“空白文稿”。
 // 标题规则与主进程共用 draftTabTitle，保证下次标签操作时两边结果一致。
@@ -1252,6 +1300,13 @@ function cleanError(error: unknown): string {
       </header>
 
       <main class="workspace" :class="[{ 'has-result': ai.open }, ...editorSurfaceClass]">
+        <!-- 与右上角大纲按钮对称的文件夹入口；仅在当前文稿来自本地文件时出现 -->
+        <div v-if="draft.filePath" class="folder-dock no-drag" @mouseenter="handleFolderEnter" @mouseleave="handleFolderLeave" @keydown.esc.stop="closeFolder">
+          <button type="button" class="folder-toggle" :class="{ 'is-active': folderPinned }" :aria-pressed="folderPinned" :aria-expanded="folderOpen" :title="folderPinned ? '取消固定文件夹' : '文件夹：浏览同目录文稿（点击固定）'" @click="toggleFolderPinned"><FolderOpen :size="17" /></button>
+          <Transition name="popover">
+            <FolderPanel v-if="folderOpen" ref="folderPanelRef" :draft-id="draft.id" @close="closeFolder" @select="openLocalFileInWindow" />
+          </Transition>
+        </div>
         <div class="floating-command floating-command-left no-drag">
           <span class="floating-command-hint format-hint" :title="draft.displayMode === 'markdown' ? '当前格式：Markdown' : '当前格式：TXT'">
             <Text v-if="draft.displayMode === 'txt'" :size="16" />
@@ -1288,7 +1343,7 @@ function cleanError(error: unknown): string {
           <button v-if="hasDefaultModel" type="button" class="enhance-icon-button" title="创意重写：更大胆地优化表达" :disabled="ai.loading" @mousedown.prevent @click="runEnhance('creative')"><Sparkles :size="18" /><span class="action-label">创意重写</span></button>
           </div>
         </div>
-        <div class="editor-layout" :class="{ markdown: draft.displayMode === 'markdown' }">
+        <div class="editor-layout" :class="{ markdown: draft.displayMode === 'markdown', 'has-folder-dock': Boolean(draft.filePath) }">
           <section class="editor-pane">
             <MilkdownEditor
               v-if="draft.displayMode === 'markdown'"

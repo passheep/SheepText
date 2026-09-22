@@ -69,12 +69,16 @@ export class WindowManager {
     this.dockTimer = null
   }
 
-  async restoreWorkspace(startHidden = false): Promise<void> {
+  async restoreWorkspace(startHidden = false, skipFallbackWindow = false): Promise<void> {
     const records = this.store.getRecoveryWindows()
     if (records.length) {
       for (const record of records) await this.createWindow(record, startHidden)
       return
     }
+
+    // 启动参数里带了待打开的文件时把窗口留给它们，避免多出一个空白窗口；
+    // 文件全部打开失败时由调用方补建窗口。
+    if (skipFallbackWindow) return
 
     const draft = this.store.getMostRecentDraft() ?? this.store.createDraft()
     // 与托盘重开保持一致：没有待恢复窗口时，继承最近关闭窗口的尺寸和位置。
@@ -96,7 +100,7 @@ export class WindowManager {
     await this.createWindow(record, !show)
   }
 
-  /** 为本地文件创建独立窗口（需求 F15：每个文件一个新窗口） */
+  /** 为文稿单独开一个窗口：标签已满、或调用方明确需要独立窗口时使用 */
   async createWindowForDraft(draftId: string, show = true): Promise<string> {
     const record = this.store.createWindowRecord(draftId, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
     await this.createWindow(record, !show)

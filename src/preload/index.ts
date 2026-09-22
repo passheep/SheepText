@@ -52,6 +52,7 @@ const api: SheepTextApi = {
   openLocalFile: (filePath: string) => ipcRenderer.invoke('file:open', currentWindowId(), filePath),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   checkExternalChange: (draftId: string) => ipcRenderer.invoke('file:check-external', currentWindowId(), draftId),
+  listDirectoryFiles: (draftId: string) => ipcRenderer.invoke('file:list-directory', currentWindowId(), draftId),
   resolveExternalChange: (draftId: string, action: 'reload' | 'keep', input: DraftSaveInput) => ipcRenderer.invoke('file:resolve-external', currentWindowId(), draftId, action, input),
   savePastedImage: (draftId: string, input: PastedImageInput) => ipcRenderer.invoke('draft:paste-image', currentWindowId(), draftId, input),
   getStorageInfo: () => ipcRenderer.invoke('storage:info', currentWindowId()),

@@ -16,6 +16,7 @@ import { AiService } from './ai-service'
 import { DataStore } from './data-store'
 import { WindowManager } from './window-manager'
 import { FileDraftService } from './file-draft-service'
+import { listSiblingDocuments, normalizeFilePath } from './file-drafts'
 
 export function registerIpc(store: DataStore, aiService: AiService, windows: WindowManager): FileDraftService {
   const files = new FileDraftService(store, {
@@ -23,6 +24,7 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     createWindow: (id) => windows.createWindowForDraft(id),
     // U07：拖入/选择打开的文件优先放进当前窗口的标签栏，标签已满时再开新窗口。
     openTab: (windowId, draftId) => windows.openDraftInTab(windowId, draftId),
+    notifyTabs: (windowId) => windows.notifyTabsChanged(windowId),
     toast: (id, payload) => {
       const record = store.getOpenWindowForDraft(id)
       const window = record ? windows.getBrowserWindow(record.id) : null
@@ -303,6 +305,23 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     assertWindow(event, windowId)
     // 拖入或主动打开的文件优先作为当前窗口的新标签
     return files.openLocalFile(filePath, undefined, windowId)
+  })
+
+  // 文件夹面板：只读当前文稿所在目录，不接受任意路径，避免变成通用文件浏览接口
+  ipcMain.handle('file:list-directory', async (event, windowId: string, draftId: string) => {
+    assertWindow(event, windowId)
+    const draft = store.getDraft(draftId)
+    if (!draft?.filePath) throw new Error('该文稿不是本地文件文稿')
+    const currentPath = normalizeFilePath(draft.filePath)
+    const { directory, files: siblings } = await listSiblingDocuments(draft.filePath)
+    return {
+      directory,
+      entries: siblings.map((file) => ({
+        name: file.name,
+        path: file.path,
+        isCurrent: normalizeFilePath(file.path) === currentPath
+      }))
+    }
   })
 
   ipcMain.handle('file:check-external', async (event, windowId: string, draftId: string) => {

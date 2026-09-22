@@ -49,9 +49,17 @@ async function drainOpenQueue(): Promise<void> {
       const request = openQueue.shift()!
       const files = extractFileArgs(request.argv)
       if (!files.length && request.activateIfEmpty) windows?.showRecentOrCreate()
+      // 右键“用 SheepText 打开”选中的多个文件放进同一个窗口的标签栏；
+      // 标签满 8 个后由 openLocalFile 自行开新窗口，后续文件跟随首次确定的那个窗口。
+      let targetWindowId: string | undefined
+      // 启动时批量打开不经过渲染层发起的 IPC，完成后需要主动同步一次标签栏。
+      const touchedWindows = new Set<string>()
       for (const filePath of files) {
-        try { await fileService.openLocalFile(filePath, request.cwd) }
-        catch (error) {
+        try {
+          const opened = await fileService.openLocalFile(filePath, request.cwd, targetWindowId)
+          if (!targetWindowId) targetWindowId = opened.windowId
+          touchedWindows.add(opened.windowId)
+        } catch (error) {
           console.error('[SheepText] openLocalFile', filePath, error)
           // 单个文件失败不阻断队列，但必须告知用户，不能静默吞掉。
           if (windows && store) {
@@ -62,6 +70,7 @@ async function drainOpenQueue(): Promise<void> {
           }
         }
       }
+      for (const windowId of touchedWindows) windows?.notifyTabsChanged(windowId)
     }
   } finally { drainingOpenQueue = false }
 }
@@ -94,7 +103,8 @@ app.whenReady().then(async () => {
   windows.startDockMonitor()
 
   const startHidden = process.argv.includes('--hidden')
-  await windows.restoreWorkspace(startHidden)
+  // 启动参数里带了待打开文件时，不再额外开一个空白回退窗口，把窗口留给这些文件
+  await windows.restoreWorkspace(startHidden, extractFileArgs(process.argv).length > 0)
   workspaceReady = true
   await drainOpenQueue()
 

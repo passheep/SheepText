@@ -51,6 +51,8 @@ const COMPLETION_SUFFIX_LIMIT = 500
 const COMPLETION_MAX_CHARS = 200
 // 自动补全：停止输入多久后请求；太短会在打字途中反复请求，太长又会显得迟钝
 const COMPLETION_AUTO_DELAY_MS = 900
+// 模型模板标记/角色标记：补全结果里出现它，说明模型没按 FIM 语义续写，而是回了一段对话内容
+const COMPLETION_JUNK_PATTERN = /<\|[^|>]{0,32}\|>|<\/?(?:speak|system|user|assistant|tool|function|think|reasoning)\b[^>]*>/i
 
 /** 灰字插件状态；from 为插入位置（ProseMirror 位置，非字符偏移）。 */
 type CompletionState = {
@@ -88,6 +90,8 @@ function buildCompletionDom(text: string): HTMLElement {
  */
 function sanitizeCompletion(raw: string, prefix: string): string {
   if (!raw) return ''
+  // 命中模板标记时整段丢弃：删掉标记后剩下的通常也是对话式回复，不是正文续写
+  if (COMPLETION_JUNK_PATTERN.test(raw)) return ''
   let text = raw.replace(/\r\n?/g, '\n')
   const paragraphBreak = text.indexOf('\n\n')
   if (paragraphBreak >= 0) text = text.slice(0, paragraphBreak)
@@ -420,6 +424,12 @@ onMounted(async () => {
     listener.blur(() => {
       // 编辑器失焦时丢弃灰字，避免切回来看到一个已过期的建议
       clearCompletion()
+      // 输入法组字中途失焦时 compositionend 可能不再触发，这里兜底复位，
+      // 否则 composing 会一直停在 true，之后的自动补全再也不会触发。
+      if (composing) {
+        composing = false
+        emit('compositionChange', false)
+      }
       requestAnimationFrame(() => {
         const focusedInside = shell.value?.contains(document.activeElement) ?? false
         emit('focusChange', focusedInside || searchOpen.value)
@@ -1151,10 +1161,8 @@ async function triggerCompletion(view: EditorView): Promise<void> {
   if (current && current.status !== 'idle') return
 
   const { prefix, suffix, pos } = buildCompletionContext(view)
-  if (!prefix.trim()) {
-    emit('toast', { type: 'info', message: '光标前没有内容，无法补全' })
-    return
-  }
+  // 光标在文稿最开头时没有可续写的前文，直接静默跳过，不打扰写作
+  if (!prefix.trim()) return
 
   const requestId = `completion-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   activeCompletionId = requestId
