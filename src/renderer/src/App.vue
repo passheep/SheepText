@@ -221,10 +221,12 @@ const booting = ref(true)
 const draft = ref<Draft | null>(null)
 const settings = ref<AppSettings | null>(null)
 const models = ref<ModelConfigPublic[]>([])
-const appVersion = ref('0.5.2')
+const appVersion = ref('0.5.3')
 const encryptionAvailable = ref(true)
 const editor = ref<EditorExpose | null>(null)
-const tabBar = ref<{ revealActive: () => Promise<void> } | null>(null)
+const tabBar = ref<{ revealActive: () => Promise<void>; setTitleDraft: (value: string) => void } | null>(null)
+// AI 正在生成标签名称（仅当前窗口一个在途请求）
+const titleGenerating = ref(false)
 // 当前窗口的标签页；主进程只同步列表与活动文稿，未保存内容由渲染层负责
 const tabs = ref<WindowTab[]>([])
 const editorFocused = ref(false)
@@ -400,6 +402,54 @@ function closeFolder(): void {
   folderOpen.value = false
 }
 
+/**
+ * 重命名普通文稿（仅当前窗口活动文稿）：主进程改库后会广播标签栏刷新，
+ * 这里同步本地 draft，避免标签已更新但窗口标题/正文区的状态还是旧的。
+ */
+async function renameDraftTitle(draftId: string, title: string): Promise<void> {
+  try {
+    const updated = await window.sheepText.renameDraft(draftId, title)
+    if (draft.value?.id === updated.id) draft.value = { ...draft.value, title: updated.title }
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  } finally {
+    // 无论成败都对齐一次标签栏：失败时把输入框里的临时值刷回真实值
+    try {
+      tabs.value = (await window.sheepText.windowTabs(windowId)).tabs
+    } catch { /* 标签刷新失败不影响主流程 */ }
+  }
+}
+
+/** 用 AI 根据当前文稿内容拟一个名称，结果填回标签输入框由用户确认。 */
+async function generateDraftTitle(draftId: string): Promise<void> {
+  const current = draft.value
+  if (!current || current.id !== draftId || titleGenerating.value) return
+  const modelConfigId = String(settings.value?.defaultModelConfigId ?? '')
+  if (!modelConfigId) {
+    showToast({ type: 'info', message: '请先在设置中配置默认模型' })
+    return
+  }
+  if (!current.content.trim()) {
+    showToast({ type: 'info', message: '文稿还没有内容，无法生成标题' })
+    return
+  }
+  titleGenerating.value = true
+  try {
+    const result = await window.sheepText.generateTitle({
+      requestId: `title-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      windowId,
+      draftId,
+      content: current.content,
+      modelConfigId
+    })
+    tabBar.value?.setTitleDraft(result.title)
+  } catch (error) {
+    showToast({ type: 'error', message: cleanError(error) })
+  } finally {
+    titleGenerating.value = false
+  }
+}
+
 async function handleFileDrop(event: DragEvent): Promise<void> {
   if (!isFileDrag(event)) return
   event.preventDefault()
@@ -472,12 +522,13 @@ watch(() => draft.value?.filePath, (path) => { if (!path) closeFolder() })
 watch(interactionState, (state) => window.sheepText.setInteractionState(windowId, state), { deep: true })
 // 普通文稿的标签标题取正文首行，编辑时同步刷新，避免标签长期停在“空白文稿”。
 // 标题规则与主进程共用 draftTabTitle，保证下次标签操作时两边结果一致。
+// 用户自定义过名称的文稿不再跟随正文首行变化。
 watch(() => draft.value?.content, (content) => {
   const current = draft.value
   if (!current || current.filePath) return
   const index = tabs.value.findIndex((tab) => tab.draftId === current.id)
   if (index < 0) return
-  const title = draftTabTitle({ filePath: null, content: content ?? '' })
+  const title = draftTabTitle({ title: current.title, filePath: null, content: content ?? '' })
   if (tabs.value[index].title !== title) {
     tabs.value = tabs.value.map((tab, i) => (i === index ? { ...tab, title } : tab))
   }
@@ -1191,7 +1242,8 @@ async function saveAs(): Promise<void> {
     const snapshot: Draft = {
       id: draft.value.id, content: draft.value.content, createdAt: draft.value.createdAt,
       updatedAt: draft.value.updatedAt, version: draft.value.version, scene: draft.value.scene,
-      modelConfigId: draft.value.modelConfigId, displayMode: draft.value.displayMode, filePath: draft.value.filePath
+      modelConfigId: draft.value.modelConfigId, displayMode: draft.value.displayMode, filePath: draft.value.filePath,
+      title: draft.value.title
     }
     const result = await window.sheepText.saveAs(snapshot)
     if (!result.canceled) showToast({ type: 'success', message: `已导出到 ${result.filePath}` })
@@ -1278,12 +1330,15 @@ function cleanError(error: unknown): string {
             ref="tabBar"
             :tabs="tabs"
             :active-draft-id="draft.id"
+            :title-generating="titleGenerating"
             @select="switchTab"
             @close="closeTab"
             @reorder="reorderTabs"
             @drag-start="beginTabDrag"
             @drag-end="handleTabDragEnd"
             @cross-drop="onTabCrossDrop"
+            @rename="renameDraftTitle"
+            @generate-title="generateDraftTitle"
           />
         </div>
 

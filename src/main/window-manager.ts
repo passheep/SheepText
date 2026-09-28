@@ -1,6 +1,6 @@
 import { app, BrowserWindow, screen } from 'electron'
 import { writeFile } from 'node:fs/promises'
-import { basename, resolve, join } from 'node:path'
+import { resolve, join } from 'node:path'
 import {
   DOCK_COLLAPSE_DELAY,
   DOCK_EXPAND_DELAY,
@@ -152,6 +152,9 @@ export class WindowManager {
     })
 
     browserWindow.setAlwaysOnTop(normalized.alwaysOnTop, 'floating')
+    // 页面 <title> 会把窗口标题改回应用名，拦下它：标题统一由 windowTitleFor 决定，
+    // 否则单独打开一个文件时（不走 switchDraft）窗口与任务栏只会显示「SheepText」。
+    browserWindow.on('page-title-updated', (event) => { event.preventDefault() })
     const runtime: WindowRuntime = {
       browserWindow,
       record: { ...normalized, width: preferredWidth, height: preferredHeight },
@@ -372,7 +375,8 @@ export class WindowManager {
         draftId: draft.id,
         title: this.tabTitle(draft),
         displayMode: draft.displayMode,
-        filePath: draft.filePath
+        filePath: draft.filePath,
+        customTitle: draft.title
       })
     }
     return tabs
@@ -689,10 +693,22 @@ export class WindowManager {
     return draftTabTitle(draft)
   }
 
-  /** 窗口标题：文件文稿显示文件名，普通文稿只显示应用名。 */
+  /** 窗口标题：显示当前文稿名，普通文稿也带上名称，便于任务栏与 Alt+Tab 区分多个窗口。 */
   private windowTitleFor(draftId: string): string {
-    const filePath = this.store.getDraft(draftId)?.filePath
-    return filePath ? `${basename(filePath)} - SheepText` : 'SheepText'
+    const draft = this.store.getDraft(draftId)
+    if (!draft) return 'SheepText'
+    return `${this.tabTitle(draft)} - SheepText`
+  }
+
+  /** 文稿名变更后刷新窗口标题与标签栏（重命名、AI 生成标题时调用）。 */
+  refreshDraftTitle(draftId: string): void {
+    const record = this.store.getOpenWindowForDraft(draftId)
+    if (!record) return
+    const runtime = this.windows.get(record.id)
+    if (!runtime) return
+    // 只有该文稿是窗口活动标签时才需要改窗口标题；其余情况刷新标签栏即可
+    if (runtime.record.draftId === draftId) this.applyWindowTitle(runtime, draftId)
+    this.notifyTabsChanged(record.id)
   }
 
   private applyWindowTitle(runtime: WindowRuntime, draftId: string): void {

@@ -70,7 +70,8 @@ const usageRangeOptions: SelectOption[] = [
 const usageKindOptions: SelectOption[] = [
   { value: '__all__', label: '全部类型' },
   { value: 'enhance', label: '文本增强' },
-  { value: 'completion', label: '行内补全' }
+  { value: 'completion', label: '行内补全' },
+  { value: 'title', label: '生成标题' }
 ]
 
 const usageModelOptions = computed<SelectOption[]>(() => [

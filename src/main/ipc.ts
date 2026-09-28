@@ -5,6 +5,7 @@ import { basename, dirname, join, parse } from 'node:path'
 import type {
   AiCompletionRequest,
   AiRequest,
+  AiTitleRequest,
   AppSettings,
   Draft,
   DraftSaveInput,
@@ -65,6 +66,16 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     assertWindow(event, windowId)
     const draft = store.createDraft()
     windows.switchDraft(windowId, draft.id)
+    return draft
+  })
+
+  // 重命名普通文稿：改完后窗口标题与标签栏都要跟着刷新
+  ipcMain.handle('draft:rename', (event, windowId: string, draftId: string, title: string) => {
+    assertWindow(event, windowId)
+    if (!store.getWindow(windowId)) throw new Error('当前窗口状态不存在')
+    if (!store.listWindowTabs(windowId).includes(draftId)) throw new Error('当前窗口未打开该文稿')
+    const draft = store.renameDraft(draftId, title)
+    windows.refreshDraftTitle(draftId)
     return draft
   })
 
@@ -248,6 +259,15 @@ export function registerIpc(store: DataStore, aiService: AiService, windows: Win
     assertWindow(event, windowId)
     if (request.windowId !== windowId) throw new Error('补全请求窗口不一致')
     return aiService.complete(request)
+  })
+
+  // 用 AI 根据文稿内容拟标题；与补全不同，失败要抛给渲染层让用户看到原因
+  ipcMain.handle('ai:generate-title', (event, windowId: string, request: AiTitleRequest) => {
+    assertWindow(event, windowId)
+    if (request.windowId !== windowId) throw new Error('生成标题请求窗口不一致')
+    const record = store.getWindow(windowId)
+    if (!record || !store.listWindowTabs(windowId).includes(request.draftId)) throw new Error('当前窗口未打开该文稿')
+    return aiService.generateTitle(request)
   })
 
   ipcMain.handle('ai:cancel-completion', (event, windowId: string, requestId: string) => {

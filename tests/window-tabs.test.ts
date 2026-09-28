@@ -200,7 +200,7 @@ function fakeWindowManager() {
     createDraft: vi.fn(() => {
       const draft: Draft = {
         id: `draft-${++counter}`, content: '', createdAt: 1, updatedAt: 1, version: 0,
-        scene: 'general', modelConfigId: null, displayMode: 'txt', filePath: null
+        scene: 'general', modelConfigId: null, displayMode: 'txt', filePath: null, title: null
       }
       drafts.set(draft.id, draft)
       return draft
@@ -295,6 +295,21 @@ describe('窗口层多标签', () => {
     f.manager.switchDraft('window-1', extra.id)
     expect(f.tabsByWindow.get('window-1')).toEqual([first.id, extra.id])
     expect(f.record.draftId).toBe(extra.id)
-    expect(f.browserWindow.setTitle).toHaveBeenCalledWith('SheepText')
+    // 普通文稿也带上名称，便于任务栏与 Alt+Tab 区分多个窗口
+    expect(f.browserWindow.setTitle).toHaveBeenCalledWith('空白文稿 - SheepText')
+  })
+
+  it('重命名后窗口标题与标签栏都改用新名称', () => {
+    const f = fakeWindowManager()
+    const draft = f.store.createDraft()
+    f.tabsByWindow.set('window-1', [draft.id])
+    f.record.draftId = draft.id
+
+    // 模拟主进程 renameDraft 后的库状态
+    f.drafts.set(draft.id, { ...draft, title: '周报草稿' })
+    f.manager.switchDraft('window-1', draft.id)
+
+    expect(f.browserWindow.setTitle).toHaveBeenCalledWith('周报草稿 - SheepText')
+    expect(f.manager.windowTabs('window-1')[0]).toMatchObject({ title: '周报草稿', customTitle: '周报草稿' })
   })
 })

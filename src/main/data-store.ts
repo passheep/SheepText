@@ -37,6 +37,7 @@ type DraftRow = {
   model_config_id: string | null
   display_mode: DisplayMode
   file_path?: string | null
+  title?: string | null
 }
 
 type ModelRow = {
@@ -175,6 +176,10 @@ export class DataStore {
     if (!draftColumns.some((column) => column.name === 'file_path')) {
       this.db.exec('ALTER TABLE drafts ADD COLUMN file_path TEXT')
     }
+    // 2026-09-22 迁移：旧库补 title 列（用户自定义文稿名，null=未命名）
+    if (!draftColumns.some((column) => column.name === 'title')) {
+      this.db.exec('ALTER TABLE drafts ADD COLUMN title TEXT')
+    }
     // F16 迁移：旧库每个窗口补一条标签；活动文稿仍由 window_states.draft_id 表示。
     this.db.exec(`
       INSERT OR IGNORE INTO window_tabs(window_id, draft_id, position)
@@ -196,7 +201,7 @@ export class DataStore {
   }
 
   exportPayload(): Record<string, unknown> {
-    const drafts = this.db.prepare('SELECT id, content, created_at AS createdAt, updated_at AS updatedAt, version, scene, model_config_id AS modelConfigId, display_mode AS displayMode FROM drafts ORDER BY updated_at DESC').all()
+    const drafts = this.db.prepare('SELECT id, content, created_at AS createdAt, updated_at AS updatedAt, version, scene, model_config_id AS modelConfigId, display_mode AS displayMode, file_path AS filePath, title FROM drafts ORDER BY updated_at DESC').all()
     const windows = this.db.prepare('SELECT id, draft_id AS draftId, x, y, width, height, display_id AS displayId, dock_side AS dockSide, is_docked AS isDocked, expanded_x AS expandedX, expanded_y AS expandedY, always_on_top AS alwaysOnTop, is_open AS isOpen, last_active_at AS lastActiveAt FROM window_states ORDER BY last_active_at DESC').all()
     const windowTabs = this.db.prepare('SELECT window_id AS windowId, draft_id AS draftId, position FROM window_tabs ORDER BY window_id ASC, position ASC').all()
     return { exportedAt: new Date().toISOString(), settings: this.getSettings(), models: this.listModels(), drafts, windows, windowTabs }
@@ -337,7 +342,7 @@ export class DataStore {
     const draft: Draft = {
       id: randomUUID(), content, createdAt: now, updatedAt: now, version: 1,
       scene: settings.defaultScene, modelConfigId: settings.defaultModelConfigId, displayMode,
-      filePath
+      filePath, title: null
     }
     this.db.prepare(`
       INSERT INTO drafts(id, content, created_at, updated_at, version, scene, model_config_id, display_mode, file_path)
@@ -354,6 +359,19 @@ export class DataStore {
     this.db.prepare('UPDATE drafts SET file_path = ? WHERE id = ?').run(normalizeFilePath(filePath), id)
   }
 
+  /**
+   * 重命名普通文稿：只改 title，不动正文与版本号（重命名不应打断编辑或触发自动保存）。
+   * 本地文件文稿的标题固定取文件名，拒绝写入自定义标题。传空字符串视为改回“未命名”。
+   */
+  renameDraft(id: string, title: string | null): Draft {
+    const current = this.getDraft(id)
+    if (!current) throw new Error('文稿不存在或已被删除')
+    if (current.filePath) throw new Error('本地文件文稿的名称跟随文件名，不能单独重命名')
+    const next = (title ?? '').trim()
+    this.db.prepare('UPDATE drafts SET title = ? WHERE id = ?').run(next || null, id)
+    return { ...current, title: next || null }
+  }
+
   createDraft(content = '', displayMode?: DisplayMode): Draft {
     const settings = this.getSettings()
     const now = Date.now()
@@ -361,7 +379,7 @@ export class DataStore {
     const draft: Draft = {
       id: randomUUID(), content: initialContent, createdAt: now, updatedAt: now, version: initialContent ? 1 : 0,
       scene: settings.defaultScene, modelConfigId: settings.defaultModelConfigId, displayMode: displayMode ?? settings.defaultDisplayMode,
-      filePath: null
+      filePath: null, title: null
     }
     this.db.prepare(`
       INSERT INTO drafts(id, content, created_at, updated_at, version, scene, model_config_id, display_mode)
@@ -430,7 +448,8 @@ export class DataStore {
     let searchCondition = ''
     let cursorCondition = ''
     if (search) {
-      searchCondition = "AND content LIKE $search ESCAPE '\\' COLLATE NOCASE"
+      // 标题也参与搜索：重命名后的文稿按名字应该能搜到
+      searchCondition = "AND (content LIKE $search ESCAPE '\\' COLLATE NOCASE OR title LIKE $search ESCAPE '\\' COLLATE NOCASE)"
       params.$search = `%${this.escapeLike(search)}%`
     }
     if (query.cursor) {
@@ -441,7 +460,7 @@ export class DataStore {
     const rows = this.db.prepare(`
       SELECT d.id,
         substr(replace(replace(trim(d.content), char(13), ' '), char(10), ' '), 1, 120) AS summary,
-        d.updated_at, d.created_at, length(d.content) AS character_count, d.display_mode, d.file_path,
+        d.updated_at, d.created_at, length(d.content) AS character_count, d.display_mode, d.file_path, d.title,
         CASE WHEN d.id = $currentDraftId THEN 1 ELSE 0 END AS is_current,
         (SELECT w.id FROM window_tabs t JOIN window_states w ON w.id = t.window_id
           WHERE t.draft_id = d.id AND w.is_open = 1
@@ -453,6 +472,7 @@ export class DataStore {
     `).all(params) as Array<{
       id: string; summary: string; updated_at: number; created_at: number; character_count: number
       display_mode: DisplayMode; is_current: number; open_window_id: string | null; file_path: string | null
+      title: string | null
     }>
     const hasMore = rows.length > limit
     const visibleRows = rows.slice(0, limit)
@@ -465,7 +485,8 @@ export class DataStore {
       displayMode: row.display_mode,
       isCurrent: Boolean(row.is_current),
       openWindowId: row.open_window_id,
-      filePath: row.file_path
+      filePath: row.file_path,
+      title: (row.title ?? '').trim() || null
     }))
     const lastItem = items.at(-1)
     return {
@@ -682,7 +703,8 @@ export class DataStore {
     return {
       id: row.id, content: row.content, createdAt: row.created_at, updatedAt: row.updated_at,
       version: row.version, scene: row.scene, modelConfigId: row.model_config_id, displayMode: row.display_mode,
-      filePath: row.file_path ?? null
+      filePath: row.file_path ?? null,
+      title: (row.title ?? '').trim() || null
     }
   }
 

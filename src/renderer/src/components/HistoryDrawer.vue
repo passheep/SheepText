@@ -18,6 +18,13 @@ function fileName(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath
 }
 
+/** 历史列表的显示名：文件文稿取文件名，普通文稿优先用自定义标题，否则用正文摘要。 */
+function historyTitle(item: DraftSummary): string {
+  if (item.filePath) return fileName(item.filePath)
+  const custom = String(item.title ?? '').trim()
+  return custom || item.summary || '空白文稿'
+}
+
 const props = defineProps<{
   open: boolean
   items: DraftSummary[]
@@ -163,7 +170,7 @@ function fullTime(timestamp: number): string {
                   <span class="mini-badge">{{ item.displayMode === 'markdown' ? 'MD' : 'TXT' }}</span>
                   <span v-if="item.filePath" class="mini-badge file-badge" title="本地文件文稿"><Folder :size="11" />文件</span>
                 </span>
-                <span class="history-summary" :title="item.filePath ? fileName(item.filePath) : item.summary">{{ item.filePath ? fileName(item.filePath) : item.summary || '空白文稿' }}</span>
+                <span class="history-summary" :title="historyTitle(item)">{{ historyTitle(item) }}</span>
                 <span class="history-delete-slot" aria-hidden="true" />
               </span>
               <span v-if="item.filePath" class="history-file-path" :title="item.filePath"><File :size="12" /><span>{{ item.filePath }}</span></span>

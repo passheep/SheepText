@@ -3,12 +3,15 @@ import type {
   AiCompletionResult,
   AiRequest,
   AiResult,
+  AiTitleRequest,
+  AiTitleResult,
   ConnectionTestResult,
   EnhanceMode,
   ModelConfigInput,
   ModelConfigPublic,
   SceneId
 } from '../shared/types'
+import { AI_TITLE_MAX_LENGTH, sanitizeDraftTitle } from '../shared/draft-title'
 import type { DataStore } from './data-store'
 
 type ModelWithSecret = ModelConfigPublic & { apiKey: string }
@@ -49,6 +52,41 @@ export function buildEnhancePrompt(scene: SceneId, mode: EnhanceMode, isSelectio
       : '本次处理整篇文稿，请保持完整结构和所有明确约束。',
     '只输出改写后的正文。'
   ].join('\n')
+}
+
+/** 生成标题的提示词：只要标题本身，不要任何解释或格式。 */
+export function buildTitlePrompt(): string {
+  return [
+    '你是 SheepText 的文稿命名助手。根据用户给出的文稿摘要，拟一个能概括全文的中文标题。',
+    `要求：不超过 ${AI_TITLE_MAX_LENGTH} 个字；只写标题本身，不要引号、书名号、句号或序号，也不要「标题：」这类前缀；`,
+    '不要使用「本文」「这篇文稿」「关于……的说明」这类空洞措辞，优先用摘要里出现的具体名词与动作。',
+    '摘要按段落切分，可能被截断，只做概括，不要续写内容。',
+    '只输出标题。'
+  ].join('\n')
+}
+
+/**
+ * 标题生成的输入摘要：长文稿只取每段开头，避免把整篇正文塞进 prompt。
+ * 段落之间用换行分隔，让模型能看出全文分成几个话题；总长度再设一道上限。
+ */
+export function buildTitleExcerpt(
+  content: string,
+  options: { maxParagraphs?: number; charsPerParagraph?: number; maxTotal?: number } = {}
+): string {
+  const { maxParagraphs = 8, charsPerParagraph = 80, maxTotal = 600 } = options
+  const paragraphs = content.split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
+    .filter((paragraph) => paragraph.length > 0)
+  const picked: string[] = []
+  let total = 0
+  for (const paragraph of paragraphs.slice(0, maxParagraphs)) {
+    const characters = Array.from(paragraph)
+    const piece = characters.length > charsPerParagraph ? `${characters.slice(0, charsPerParagraph).join('')}…` : paragraph
+    if (total + piece.length > maxTotal) break
+    picked.push(piece)
+    total += piece.length
+  }
+  return picked.join('\n')
 }
 
 export function protectSensitiveSegments(source: string): ProtectedText {
@@ -206,6 +244,48 @@ export class AiService {
         modelName: config.name,
         status: 'error',
         durationMs: Date.now() - startedAt,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      })
+      throw error
+    } finally {
+      this.activeRequests.delete(request.requestId)
+      this.activeCount = Math.max(0, this.activeCount - 1)
+    }
+  }
+
+  /**
+   * 用 AI 生成文稿标题。
+   * 长文稿只把每段开头拼成摘要发出去，控制单次 token 消耗；
+   * 失败原因记入用量统计（kind='title'）并向调用方抛错，由渲染层提示。
+   */
+  async generateTitle(request: AiTitleRequest): Promise<AiTitleResult> {
+    if (this.activeRequests.has(request.requestId)) throw new Error('该请求正在处理中')
+    if (this.activeCount >= this.maxConcurrentRequests) throw new Error('当前 AI 请求较多，请稍后再试')
+
+    const excerpt = buildTitleExcerpt(request.content)
+    if (!excerpt) throw new Error('文稿还没有内容，无法生成标题')
+    const config = this.store.getModelWithSecret(request.modelConfigId)
+    if (!config) throw new Error('所选模型配置不存在，请重新选择')
+
+    const controller = new AbortController()
+    this.activeRequests.set(request.requestId, controller)
+    this.activeCount += 1
+    const startedAt = Date.now()
+    try {
+      const response = await this.callModel(config, buildTitlePrompt(), excerpt, controller)
+      const title = sanitizeDraftTitle(response.text, AI_TITLE_MAX_LENGTH)
+      if (!title) throw new Error('模型没有返回可用的标题，请重试')
+      this.store.recordTokenUsage({
+        kind: 'title', scene: null, modelConfigId: config.id, modelName: config.name,
+        promptTokens: response.usage?.inputTokens, completionTokens: response.usage?.outputTokens,
+        cacheHitTokens: response.usage?.cacheHitTokens, cacheMissTokens: response.usage?.cacheMissTokens,
+        status: 'ok', durationMs: Date.now() - startedAt
+      })
+      return { requestId: request.requestId, title }
+    } catch (error) {
+      this.store.recordTokenUsage({
+        kind: 'title', scene: null, modelConfigId: config.id, modelName: config.name,
+        status: 'error', durationMs: Date.now() - startedAt,
         errorMessage: error instanceof Error ? error.message : String(error)
       })
       throw error

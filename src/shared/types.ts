@@ -21,6 +21,8 @@ export interface Draft {
   displayMode: DisplayMode
   /** 本地文件路径；null 表示普通文稿，非空表示文件文稿（内容以磁盘文件为准并双写数据库） */
   filePath: string | null
+  /** 用户自定义标题；null 表示未命名，标签与历史列表回退到正文首行 */
+  title: string | null
 }
 
 export interface DraftSaveInput {
@@ -42,6 +44,8 @@ export interface DraftSummary {
   isCurrent: boolean
   openWindowId: string | null
   filePath: string | null
+  /** 用户自定义标题；本地文件文稿恒为 null（标题取文件名） */
+  title: string | null
 }
 
 export interface HistoryQuery {
@@ -140,6 +144,8 @@ export interface WindowTab {
   title: string
   displayMode: DisplayMode
   filePath: string | null
+  /** 用户自定义标题；标签重命名时作为编辑初值，null 表示跟随正文首行 */
+  customTitle: string | null
 }
 
 export interface WindowTabsResult {
@@ -188,6 +194,19 @@ export interface AiRequest {
 /** 补全触发键预设。 */
 export type CompletionTriggerKey = 'alt-arrow-right' | 'ctrl-arrow-right' | 'alt-slash'
 
+export interface AiTitleRequest {
+  requestId: string
+  windowId: string
+  draftId: string
+  content: string
+  modelConfigId: string
+}
+
+export interface AiTitleResult {
+  requestId: string
+  title: string
+}
+
 /** 文件夹面板里的一个同级文件。 */
 export interface LocalFileEntry {
   name: string
@@ -234,7 +253,7 @@ export interface AiResult {
 }
 
 /** 用量记录的类型：文本增强 / 行内补全。 */
-export type TokenUsageKind = 'enhance' | 'completion'
+export type TokenUsageKind = 'enhance' | 'completion' | 'title'
 
 /** ok=正常完成；error=失败（补全静默失败也靠这里排查）。 */
 export type TokenUsageStatus = 'ok' | 'error'
@@ -368,6 +387,10 @@ export interface SheepTextApi {
   reorderTabs: (windowId: string, orderedDraftIds: string[]) => Promise<WindowTab[]>
   searchHistory: (query: HistoryQuery) => Promise<HistoryPage>
   deleteDraft: (windowId: string, draftId: string) => Promise<DeleteDraftResult>
+  /** 重命名普通文稿（本地文件文稿的名称跟随文件名，会报错）；传空字符串改回未命名 */
+  renameDraft: (draftId: string, title: string) => Promise<Draft>
+  /** 用 AI 根据文稿内容生成标题（长文稿只发每段开头拼成的摘要） */
+  generateTitle: (request: AiTitleRequest) => Promise<AiTitleResult>
   newWindow: () => Promise<void>
   listModels: () => Promise<ModelConfigPublic[]>
   saveModel: (input: ModelConfigInput) => Promise<ModelConfigPublic[]>

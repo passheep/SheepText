@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
 function fixture(withDraft = true) {
   let draft: Draft | null = withDraft ? {
     id: 'draft', content: '基线', createdAt: 1, updatedAt: 1, version: 1,
-    scene: 'general', modelConfigId: null, displayMode: 'txt', filePath: 'C:\\notes\\a.txt'
+    scene: 'general', modelConfigId: null, displayMode: 'txt', filePath: 'C:\\notes\\a.txt', title: null
   } : null
   let disk = '基线'
   let encoding: SourceEncoding = 'utf8'
@@ -29,7 +29,7 @@ function fixture(withDraft = true) {
     getDraft: vi.fn(() => draft && { ...draft }),
     findFileDraft: vi.fn((path: string) => draft && normalizeFilePath(draft.filePath!) === path ? { ...draft } : null),
     createFileDraft: vi.fn((path: string, content: string, displayMode: 'txt' | 'markdown') => {
-      draft = { id: 'draft', content, displayMode, filePath: path, version: 1, createdAt: 1, updatedAt: 1, scene: 'general', modelConfigId: null }
+      draft = { id: 'draft', content, displayMode, filePath: path, version: 1, createdAt: 1, updatedAt: 1, scene: 'general', modelConfigId: null, title: null }
       return { ...draft }
     }),
     saveDraft: vi.fn((input: DraftSaveInput) => {
