@@ -295,8 +295,8 @@ describe('窗口层多标签', () => {
     f.manager.switchDraft('window-1', extra.id)
     expect(f.tabsByWindow.get('window-1')).toEqual([first.id, extra.id])
     expect(f.record.draftId).toBe(extra.id)
-    // 普通文稿也带上名称，便于任务栏与 Alt+Tab 区分多个窗口
-    expect(f.browserWindow.setTitle).toHaveBeenCalledWith('空白文稿 - SheepText')
+    // 任务栏直接显示文稿名，不附加应用名
+    expect(f.browserWindow.setTitle).toHaveBeenCalledWith('空白文稿')
   })
 
   it('重命名后窗口标题与标签栏都改用新名称', () => {
@@ -309,7 +309,7 @@ describe('窗口层多标签', () => {
     f.drafts.set(draft.id, { ...draft, title: '周报草稿' })
     f.manager.switchDraft('window-1', draft.id)
 
-    expect(f.browserWindow.setTitle).toHaveBeenCalledWith('周报草稿 - SheepText')
+    expect(f.browserWindow.setTitle).toHaveBeenCalledWith('周报草稿')
     expect(f.manager.windowTabs('window-1')[0]).toMatchObject({ title: '周报草稿', customTitle: '周报草稿' })
   })
 })

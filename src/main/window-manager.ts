@@ -119,7 +119,7 @@ export class WindowManager {
     normalized.draftId = this.ensureWindowTabs(normalized.id, normalized.draftId)
 
     const settings = this.store.getSettings()
-    // 渲染页完成 bootstrap 前，系统窗口也使用已保存的文件名；后续由 App 的标题 watcher 同步。
+    // 渲染页完成 bootstrap 前，系统窗口也使用已保存的文稿名；后续由主进程同步。
     const browserWindow = new BrowserWindow({
       title: this.windowTitleFor(normalized.draftId),
       x: normalized.x ?? undefined,
@@ -693,11 +693,11 @@ export class WindowManager {
     return draftTabTitle(draft)
   }
 
-  /** 窗口标题：显示当前文稿名，普通文稿也带上名称，便于任务栏与 Alt+Tab 区分多个窗口。 */
+  /** 窗口标题：任务栏与 Alt+Tab 直接显示当前文稿名，不附加应用名。 */
   private windowTitleFor(draftId: string): string {
     const draft = this.store.getDraft(draftId)
     if (!draft) return 'SheepText'
-    return `${this.tabTitle(draft)} - SheepText`
+    return this.tabTitle(draft)
   }
 
   /** 文稿名变更后刷新窗口标题与标签栏（重命名、AI 生成标题时调用）。 */

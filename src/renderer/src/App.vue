@@ -221,7 +221,7 @@ const booting = ref(true)
 const draft = ref<Draft | null>(null)
 const settings = ref<AppSettings | null>(null)
 const models = ref<ModelConfigPublic[]>([])
-const appVersion = ref('0.5.3')
+const appVersion = ref('0.5.4')
 const encryptionAvailable = ref(true)
 const editor = ref<EditorExpose | null>(null)
 const tabBar = ref<{ revealActive: () => Promise<void>; setTitleDraft: (value: string) => void } | null>(null)
@@ -992,9 +992,12 @@ async function loadHistory(reset: boolean): Promise<void> {
   }
   historyLoading.value = true
   try {
+    // cursor 必须转回普通对象：ref 里的对象会被 Vue 包成 Proxy，
+    // 直接 IPC 过去会报 “An object could not be cloned.”
+    const cursor = historyCursor.value
     const page = await window.sheepText.searchHistory({
       search: historySearch.value,
-      cursor: historyCursor.value,
+      cursor: cursor ? { updatedAt: cursor.updatedAt, id: cursor.id } : null,
       limit: HISTORY_PAGE_SIZE,
       currentDraftId: draft.value.id
     })

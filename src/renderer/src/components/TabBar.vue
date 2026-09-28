@@ -241,7 +241,7 @@ defineExpose({
           title="用 AI 根据文稿内容生成名称"
           :aria-label="`用 AI 为 ${tab.title} 生成名称`"
           @click.stop="requestAiTitle(tab.draftId)"
-          @mousedown.stop
+          @mousedown.prevent.stop
         ><Loader2 v-if="titleGenerating" class="tab-title-spin" :size="12" /><Sparkles v-else :size="12" /></button>
       </template>
       <span v-else class="tab-title">{{ tab.title }}</span>
